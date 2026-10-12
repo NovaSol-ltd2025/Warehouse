@@ -1,10 +1,12 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { BranchOrder } from '../types/inventory';
 import { COMPANY_INFO } from '../data/mockInitialData';
 import { NovasolLogo } from './NovasolLogo';
 import { useInventory } from '../context/InventoryContext';
 import { SignatureModal } from './SignatureModal';
-import html2canvas from 'html2canvas';
+// html2canvas-pro: รองรับสี oklch/oklab ของ Tailwind v4 (html2canvas ตัวเดิมจะ error)
+import html2canvas from 'html2canvas-pro';
+import { createPortal } from 'react-dom';
 import { jsPDF } from 'jspdf';
 import {
   Printer,
@@ -31,6 +33,12 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
   const { updateBranchOrder, deleteBranchOrder } = useInventory();
   const [currentOrder, setCurrentOrder] = useState<BranchOrder>(initialOrder);
   const printContentRef = useRef<HTMLDivElement>(null);
+  // เก็บไฟล์ที่เรนเดอร์ไว้แล้ว เพื่อให้ปุ่มแชร์ทำงานทันทีหลังกด
+  // (เบราว์เซอร์มือถืออนุญาตให้เรียกแชร์ได้เฉพาะช่วงสั้น ๆ หลังกดปุ่ม ถ้าเรนเดอร์ก่อนแชร์จะหมดสิทธิ์)
+  const cacheRef = useRef<{
+    image?: { blob: Blob; fileName: string };
+    pdf?: { blob: Blob; fileName: string };
+  }>({});
 
   // Modals state
   const [showSignatureModal, setShowSignatureModal] = useState(false);
@@ -39,6 +47,22 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+  // เรนเดอร์รูป/PDF รอไว้ในพื้นหลังทันทีที่เปิดใบส่งของ (และเมื่อมีการแก้ เช่น เซ็นชื่อเพิ่ม)
+  // เพื่อให้กดแชร์แล้วส่งได้ทันที ไม่ต้องรอเรนเดอร์
+  useEffect(() => {
+    cacheRef.current = {};
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      await generateImageBlob(true);
+      if (!cancelled) await generatePdfBlob(true);
+    }, 1200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentOrder]);
 
   const showToast = (msg: string) => {
     setActionMessage(msg);
@@ -77,75 +101,100 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
     }, 600);
   };
 
-  // Generate Image Blob (PNG) using html2canvas
-  const generateImageBlob = async (): Promise<{ blob: Blob; fileName: string } | null> => {
-    if (!printContentRef.current) return null;
-    setIsGeneratingImage(true);
+  // จับภาพใบส่งของเป็น canvas (ใช้ร่วมกันทั้งรูปภาพและ PDF)
+  const captureCanvas = async (): Promise<HTMLCanvasElement> => {
+    const element = printContentRef.current;
+    if (!element) throw new Error('ไม่พบเอกสาร');
+    if ((document as any).fonts?.ready) await (document as any).fonts.ready;
+    // รอรูปทั้งหมด (โลโก้/รูปสินค้า) โหลดเสร็จหรือล้มเหลวก่อน ไม่งั้นรูปอาจหายจากไฟล์ (รอสูงสุด 6 วินาที)
+    await Promise.race([
+      Promise.all(
+        Array.from(element.querySelectorAll('img'))
+          .filter((img) => !img.complete)
+          .map(
+            (img) =>
+              new Promise<void>((resolve) => {
+                img.addEventListener('load', () => resolve(), { once: true });
+                img.addEventListener('error', () => resolve(), { once: true });
+              })
+          )
+      ),
+      new Promise((resolve) => setTimeout(resolve, 6000)),
+    ]);
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null))); // ให้โลโก้สำรอง (SVG) เรนเดอร์ก่อน
+    return html2canvas(element, {
+      scale: 2, // ความละเอียดสูง ให้ตัวอักษรและลายเซ็นคมชัด
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      // ซ่อนปุ่มที่ไม่ควรอยู่ในรูป (เช่น ข้อความช่วยเหลือ) เฉพาะตอนจับภาพ
+      // ในเอกสารที่ไลบรารีคัดลอกไปจับภาพ ไฟล์ CSS ภายนอกยังโหลดไม่ทัน (ตัวอักษร/สไตล์จะหาย)
+      // จึงฝังกฎ CSS ของหน้านี้ลงในสำเนาโดยตรง
+      // ไม่เอาข้อความ/ปุ่มช่วยเหลือ (เช่น "แตะเพื่อเซ็นชื่อ") ลงในรูป เหมือนตอนพิมพ์
+      ignoreElements: (el) => el.classList?.contains('no-print') ?? false,
+      onclone: (doc) => {
+        const css = Array.from(document.styleSheets)
+          .map((sheet) => {
+            try {
+              return Array.from(sheet.cssRules)
+                .map((rule) => rule.cssText)
+                .join(' ');
+            } catch {
+              return ''; // สไตล์จากโดเมนอื่น (เช่น Google Fonts) อ่านไม่ได้ ข้ามไป
+            }
+          })
+          .join(' ');
+        const style = doc.createElement('style');
+        style.textContent = css;
+        doc.head.appendChild(style);
+      },
+    });
+  };
 
+  const fileBase = () =>
+    `ใบส่งของ_${currentOrder.deliveryOrderNo}_${currentOrder.branchName.replace(/\s+/g, '_')}`;
+
+  // Generate Image Blob (PNG)
+  const generateImageBlob = async (silent = false): Promise<{ blob: Blob; fileName: string } | null> => {
+    if (cacheRef.current.image) return cacheRef.current.image;
+    if (!silent) setIsGeneratingImage(true);
     try {
-      const element = printContentRef.current;
-      const canvas = await html2canvas(element, {
-        scale: 2, // High resolution for clear text and signatures
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        logging: false,
-      });
-
-      return new Promise((resolve) => {
-        canvas.toBlob((blob) => {
-          if (!blob) {
-            resolve(null);
-            return;
-          }
-          const safeBranch = currentOrder.branchName.replace(/\s+/g, '_');
-          const fileName = `ใบส่งของ_${currentOrder.deliveryOrderNo}_${safeBranch}.png`;
-          resolve({ blob, fileName });
-        }, 'image/png');
-      });
+      const canvas = await captureCanvas();
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) return null;
+      const res = { blob, fileName: `${fileBase()}.png` };
+      cacheRef.current.image = res;
+      return res;
     } catch (err) {
       console.error('Image generation error', err);
       return null;
     } finally {
-      setIsGeneratingImage(false);
+      if (!silent) setIsGeneratingImage(false);
     }
   };
 
-  // Generate PDF file using html2canvas and jsPDF
-  const generatePdfBlob = async (): Promise<{ blob: Blob; fileName: string } | null> => {
-    if (!printContentRef.current) return null;
-    setIsGeneratingPdf(true);
-
+  // Generate PDF (A4 หน้าเดียว ย่อพอดีหน้ากระดาษโดยไม่บิดสัดส่วน)
+  const generatePdfBlob = async (silent = false): Promise<{ blob: Blob; fileName: string } | null> => {
+    if (cacheRef.current.pdf) return cacheRef.current.pdf;
+    if (!silent) setIsGeneratingPdf(true);
     try {
-      const element = printContentRef.current;
-      const canvas = await html2canvas(element, {
-        scale: 2, // high quality
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        logging: false,
-      });
-
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4',
-      });
-
-      const imgWidth = 210;
-      const pageHeight = 297;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-      pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, Math.min(pageHeight, imgHeight));
-      const safeBranch = currentOrder.branchName.replace(/\s+/g, '_');
-      const fileName = `ใบส่งของ_${currentOrder.deliveryOrderNo}_${safeBranch}.pdf`;
-      const blob = pdf.output('blob');
-
-      return { blob, fileName };
+      const canvas = await captureCanvas();
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageW = 210;
+      const pageH = 297;
+      const ratio = Math.min(pageW / canvas.width, pageH / canvas.height);
+      const w = canvas.width * ratio;
+      const h = canvas.height * ratio;
+      // JPEG คุณภาพสูง: ไฟล์เล็กกว่า PNG มาก (พื้นหลังขาวทึบอยู่แล้ว)
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', (pageW - w) / 2, 0, w, h);
+      const res = { blob: pdf.output('blob'), fileName: `${fileBase()}.pdf` };
+      cacheRef.current.pdf = res;
+      return res;
     } catch (err) {
       console.error('PDF error', err);
       return null;
     } finally {
-      setIsGeneratingPdf(false);
+      if (!silent) setIsGeneratingPdf(false);
     }
   };
 
@@ -328,18 +377,19 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
   const month = String(orderDateObj.getMonth() + 1).padStart(2, '0');
   const thaiYear = orderDateObj.getFullYear() + 543;
 
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-sm flex justify-center items-start overflow-y-auto p-2 sm:p-4 md:p-6 print:p-0 print:bg-white print:static print:inset-auto">
+  // แสดงผ่าน portal ที่ <body> เพื่อให้ตอนพิมพ์ซ่อนหน้าเว็บอื่นทั้งหมดได้ (พิมพ์เฉพาะใบส่งของ)
+  return createPortal(
+    <div className="delivery-note-portal fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-sm flex justify-center items-start overflow-y-auto p-2 sm:p-4 md:p-6">
       {/* Toast Alert */}
       {actionMessage && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-60 bg-slate-900 text-white text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-xl border border-slate-700 flex items-center gap-2 animate-in fade-in slide-in-from-top-4">
+        <div className="no-print fixed top-5 left-1/2 -translate-x-1/2 z-60 bg-slate-900 text-white text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-xl border border-slate-700 flex items-center gap-2 animate-in fade-in slide-in-from-top-4">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{actionMessage}</span>
         </div>
       )}
 
       {/* Container card */}
-      <div className="relative bg-white w-full max-w-4xl my-2 sm:my-4 rounded-xl shadow-2xl border border-slate-200 overflow-hidden print:shadow-none print:border-none print:my-0 print:w-full print:max-w-none">
+      <div className="note-card relative bg-white w-full max-w-4xl my-2 sm:my-4 rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
         
         {/* Top Action Toolbar (Hidden during print) */}
         <div className="no-print bg-slate-900 text-white px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-2.5 border-b border-slate-800">
@@ -664,7 +714,7 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
 
       {/* 2. Delete Confirmation Modal (Requirement 1) */}
       {showDeleteConfirm && (
-        <div className="fixed inset-0 z-60 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="no-print fixed inset-0 z-60 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
             <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-4">
               <AlertTriangle className="w-6 h-6" />
@@ -706,7 +756,7 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
 
       {/* 3. Share Options Modal (Requirement 2 - LINE & file share) */}
       {showShareModal && (
-        <div className="fixed inset-0 z-60 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="no-print fixed inset-0 z-60 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
@@ -839,6 +889,7 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
         </div>
       )}
 
-    </div>
+    </div>,
+    document.body
   );
 };
