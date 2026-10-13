@@ -5,6 +5,7 @@ import { DeliveryNotePrint } from './components/DeliveryNotePrint';
 import { AutoReorderModal } from './components/AutoReorderModal';
 import { BranchRequisitionModal } from './components/BranchRequisitionModal';
 import { StockAdjustmentModal } from './components/StockAdjustmentModal';
+import { OrderEditModal } from './components/OrderEditModal';
 import { GoogleSheetsExporter } from './components/GoogleSheetsExporter';
 import { InventoryItem, BranchOrder, PurchaseOrder, ItemCategory } from './types/inventory';
 import { COMPANY_INFO } from './data/mockInitialData';
@@ -43,6 +44,7 @@ import {
   Target,
   Trash2,
   Building2,
+  Pencil,
 } from 'lucide-react';
 import { GoogleAppsScriptModal } from './components/GoogleAppsScriptModal';
 import { ItemDetailModal } from './components/ItemDetailModal';
@@ -83,6 +85,7 @@ const MainApp: React.FC = () => {
 
   // Order deletion confirmation state
   const [orderToDelete, setOrderToDelete] = useState<BranchOrder | null>(null);
+  const [orderToEdit, setOrderToEdit] = useState<BranchOrder | null>(null);
 
   // Modals state
   const [showAutoReorderModal, setShowAutoReorderModal] = useState(false);
@@ -1161,6 +1164,15 @@ const MainApp: React.FC = () => {
                           </button>
 
                           <button
+                            onClick={() => setOrderToEdit(order)}
+                            className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3 py-2 rounded-xl transition-colors cursor-pointer shadow-xs"
+                            title="แก้ไขรายการ จำนวน ราคา หมายเหตุ ของใบส่งสินค้านี้"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>แก้ไข</span>
+                          </button>
+
+                          <button
                             onClick={() => setSelectedOrderToPrint(order)}
                             className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-colors cursor-pointer shadow-xs"
                           >
@@ -1479,6 +1491,10 @@ const MainApp: React.FC = () => {
       {/* ========================================================= */}
 
       {/* 1. Printable Delivery Slip Modal (matches exact uploaded PDF sample) */}
+      {orderToEdit && (
+        <OrderEditModal order={orderToEdit} onClose={() => setOrderToEdit(null)} />
+      )}
+
       {selectedOrderToPrint && (
         <DeliveryNotePrint
           order={selectedOrderToPrint}

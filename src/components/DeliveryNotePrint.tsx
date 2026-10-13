@@ -4,11 +4,13 @@ import { COMPANY_INFO } from '../data/mockInitialData';
 import { NovasolLogo } from './NovasolLogo';
 import { useInventory } from '../context/InventoryContext';
 import { SignatureModal } from './SignatureModal';
+import { OrderEditModal } from './OrderEditModal';
 // html2canvas-pro: รองรับสี oklch/oklab ของ Tailwind v4 (html2canvas ตัวเดิมจะ error)
 import html2canvas from 'html2canvas-pro';
 import { createPortal } from 'react-dom';
 import { jsPDF } from 'jspdf';
 import {
+  Pencil,
   Printer,
   X,
   Download,
@@ -44,6 +46,7 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
   const [showSignatureModal, setShowSignatureModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -409,6 +412,16 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+            {/* Edit order button */}
+            <button
+              onClick={() => setShowEditModal(true)}
+              className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-xs transition-colors cursor-pointer"
+              title="แก้ไขรายการ จำนวน ราคา หมายเหตุ ของใบส่งของนี้"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              <span>แก้ไขรายการ</span>
+            </button>
+
             {/* Signature button */}
             <button
               onClick={() => setShowSignatureModal(true)}
@@ -702,6 +715,18 @@ export const DeliveryNotePrint: React.FC<DeliveryNotePrintProps> = ({ order: ini
         </div>
 
       </div>
+
+      {/* 0. Edit Order Modal */}
+      {showEditModal && (
+        <OrderEditModal
+          order={currentOrder}
+          onClose={() => setShowEditModal(false)}
+          onSaved={(updated) => {
+            setCurrentOrder(updated);
+            showToast('✅ บันทึกการแก้ไขใบส่งสินค้าเรียบร้อยแล้ว');
+          }}
+        />
+      )}
 
       {/* 1. Signature Modal */}
       {showSignatureModal && (
