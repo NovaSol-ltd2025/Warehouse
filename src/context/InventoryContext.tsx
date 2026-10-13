@@ -84,6 +84,7 @@ interface InventoryContextType {
   ) => Promise<BranchOrder>;
   updateBranchOrderStatus: (id: string, status: BranchOrderStatus) => Promise<void>;
   markOrderPayment: (id: string, paid: boolean, paymentRef?: string) => Promise<void>;
+  markPOPayment: (id: string, paid: boolean, paymentRef?: string) => Promise<void>;
   reconcileDeliveredOrder: (before: BranchOrder, after: BranchOrder) => Promise<void>;
   updateBranchOrder: (order: BranchOrder) => Promise<void>;
   deleteBranchOrder: (id: string, restoreStock?: boolean) => Promise<void>;
@@ -512,6 +513,14 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
+  const markPOPayment = async (id: string, paid: boolean, paymentRef?: string) => {
+    const patch = paid
+      ? { paymentStatus: 'PAID' as const, paidAt: new Date().toISOString().split('T')[0], paymentRef: paymentRef || '' }
+      : { paymentStatus: 'UNPAID' as const, paidAt: '', paymentRef: '' };
+    await commit([{ op: 'upsert', collection: 'purchase_orders', id, data: patch, merge: true }]);
+    setPurchaseOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
+  };
+
   const markOrderPayment = async (id: string, paid: boolean, paymentRef?: string) => {
     const patch = paid
       ? { paymentStatus: 'PAID' as const, paidAt: new Date().toISOString().split('T')[0], paymentRef: paymentRef || '' }
@@ -831,6 +840,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         createBranchOrder,
         updateBranchOrderStatus,
         markOrderPayment,
+        markPOPayment,
         reconcileDeliveredOrder,
         updateBranchOrder,
         deleteBranchOrder,

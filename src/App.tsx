@@ -54,6 +54,8 @@ import { LiveGoogleSheetStatusBar } from './components/LiveGoogleSheetStatusBar'
 import { BranchDemandPlanningTab } from './components/BranchDemandPlanningTab';
 import { BranchManagementTab } from './components/BranchManagementTab';
 import { SupplierManagementTab } from './components/SupplierManagementTab';
+import { BudgetReportTab } from './components/BudgetReportTab';
+import { Wallet } from 'lucide-react';
 import { Factory } from 'lucide-react';
 import { processLocalImageFile, convertToLh3Url } from './utils/imageHelper';
 
@@ -83,6 +85,7 @@ const MainApp: React.FC = () => {
     | 'DEMAND_PLANNING'
     | 'BRANCH_MANAGEMENT'
     | 'SUPPLIERS'
+    | 'BUDGET'
     | 'PURCHASE_ORDERS'
     | 'SHEETS_SYNC'
   >('DASHBOARD');
@@ -355,6 +358,18 @@ const MainApp: React.FC = () => {
             >
               <Factory className="w-4 h-4 text-blue-600" />
               <span>Supplier ผู้จัดจำหน่าย ({suppliers.length})</span>
+            </button>
+
+            <button
+              onClick={() => setCurrentTab('BUDGET')}
+              className={`px-3 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                currentTab === 'BUDGET'
+                  ? 'bg-blue-50 text-blue-700 font-bold border-b-2 border-blue-600'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Wallet className="w-4 h-4 text-blue-600" />
+              <span>งบประมาณ & ค้างจ่าย</span>
             </button>
 
             <button
@@ -1331,6 +1346,7 @@ const MainApp: React.FC = () => {
         )}
 
         {currentTab === 'SUPPLIERS' && <SupplierManagementTab />}
+        {currentTab === 'BUDGET' && <BudgetReportTab />}
 
         {/* ========================================================= */}
         {/* 4. SUPPLIER PURCHASE ORDERS (PO) VIEW */}

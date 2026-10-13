@@ -127,6 +127,9 @@ export interface PurchaseOrder {
   status: POStatus;
   notes?: string;
   smartPriceWarnings?: string[]; // Price increase alerts
+  paymentStatus?: 'UNPAID' | 'PAID';
+  paidAt?: string;
+  paymentRef?: string;
 }
 
 export interface StockMovement {
