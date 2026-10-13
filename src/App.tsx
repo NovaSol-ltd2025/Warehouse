@@ -1223,6 +1223,15 @@ const MainApp: React.FC = () => {
                             </button>
                           )}
 
+                          {order.status === 'DELIVERED' && (
+                            <span
+                              className="text-xs font-bold px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              title="ยืนยันส่งแล้ว และลงบัญชีสต็อกแล้ว"
+                            >
+                              ✓ ยืนยันส่งแล้ว
+                            </span>
+                          )}
+
                           <button
                             onClick={() => {
                               if (order.paymentStatus === 'PAID') {
