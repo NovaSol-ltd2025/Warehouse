@@ -887,9 +887,14 @@ const MainApp: React.FC = () => {
 
                           {/* Price & Volatility indicator */}
                           <td className="py-3 px-3 text-right">
-                            <div className="font-semibold text-slate-800">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedItemForDetail(item)}
+                              className="font-semibold text-slate-800 hover:text-blue-700 hover:underline decoration-dotted cursor-pointer"
+                              title="คลิกเพื่อแก้ไขราคาต่อหน่วยและหน่วยนับ"
+                            >
                               {item.unitPrice.toLocaleString()} ฿ / {item.unit}
-                            </div>
+                            </button>
                             {priceDiff > 0 && (
                               <span className="text-[10px] text-rose-600 font-bold flex items-center justify-end gap-0.5">
                                 <TrendingUp className="w-3 h-3" /> +{pricePercent}%

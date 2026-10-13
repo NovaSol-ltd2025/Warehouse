@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { InventoryItem, PriceHistoryRecord } from '../types/inventory';
+import { InventoryItem, ItemCategory, PriceHistoryRecord } from '../types/inventory';
 import { useInventory } from '../context/InventoryContext';
 import { getPriceTrend } from '../utils/smartValidator';
 import { processLocalImageFile, convertToLh3Url, extractGoogleDriveId } from '../utils/imageHelper';
@@ -29,11 +29,13 @@ interface ItemDetailModalProps {
 }
 
 export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({ item, onClose }) => {
-  const { updateItem, branches } = useInventory();
+  const { updateItem, branches, items: allItems } = useInventory();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form states
   const [name, setName] = useState(item.name);
+  const [unit, setUnit] = useState(item.unit);
+  const [category, setCategory] = useState<ItemCategory>(item.category);
   const [unitPrice, setUnitPrice] = useState(item.unitPrice);
   const [baselinePrice, setBaselinePrice] = useState(item.baselinePrice || item.unitPrice);
   const [imageUrl, setImageUrl] = useState(item.imageUrl || '');
@@ -130,6 +132,8 @@ export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({ item, onClose 
     const updatedItem: InventoryItem = {
       ...item,
       name,
+      unit: unit.trim() || item.unit,
+      category,
       unitPrice: Number(unitPrice),
       baselinePrice: Number(baselinePrice),
       imageUrl: imageUrl.trim() || undefined,
@@ -421,7 +425,39 @@ export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({ item, onClose 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  ราคาซื้อปัจจุบัน (บาท / {item.unit}) *
+                  หน่วยนับ (เช่น ตัว, แกลลอน, กก., ด้าม) *
+                </label>
+                <input
+                  type="text"
+                  list="unit-options"
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <datalist id="unit-options">
+                  {[...new Set([...allItems.map((i) => i.unit), 'ตัว', 'แกลลอน', 'กก.', 'ด้าม', 'ลัง', 'กล่อง', 'ชิ้น', 'ถุง', 'ห่อ'])].map((u) => (
+                    <option key={u} value={u} />
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">หมวดหมู่</label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value as ItemCategory)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {[...new Set<ItemCategory>([item.category, ...allItems.map((i) => i.category)])].map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  ราคาซื้อปัจจุบัน (บาท / {unit || item.unit}) *
                 </label>
                 <input
                   type="number"
