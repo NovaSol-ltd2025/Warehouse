@@ -1232,6 +1232,23 @@ const MainApp: React.FC = () => {
                             </span>
                           )}
 
+                          {order.status === 'DELIVERED' && (
+                            <button
+                              onClick={() => {
+                                if (
+                                  window.confirm(
+                                    `ยกเลิกการยืนยันส่งใบ ${order.deliveryOrderNo}?\nระบบจะย้อนรายการรับเข้า/จ่ายออกในสต็อก และเปลี่ยนสถานะกลับเป็น "กำลังจัดส่ง"`
+                                  )
+                                )
+                                  updateBranchOrderStatus(order.id, 'IN_TRANSIT');
+                              }}
+                              className="text-xs font-bold px-3 py-2 rounded-xl bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 cursor-pointer"
+                              title="ยกเลิกการยืนยันส่ง และคืนรายการสต็อก"
+                            >
+                              ยกเลิกการยืนยัน
+                            </button>
+                          )}
+
                           <button
                             onClick={() => {
                               if (order.paymentStatus === 'PAID') {

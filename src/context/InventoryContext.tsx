@@ -537,6 +537,10 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     if (status === 'DELIVERED' && order.status !== 'DELIVERED') {
       await postDeliveryStock(order, 1);
     }
+    // ยกเลิกการยืนยันส่ง: ย้อนรายการรับเข้า/จ่ายออกที่ลงไว้
+    if (order.status === 'DELIVERED' && status !== 'DELIVERED') {
+      await postDeliveryStock(order, -1);
+    }
 
     await commit([
       { op: 'upsert', collection: 'branch_orders', id, data: { status }, merge: true },
