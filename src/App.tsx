@@ -68,6 +68,7 @@ const MainApp: React.FC = () => {
     sheetsSync,
     isSheetsConfigured,
     updateBranchOrderStatus,
+    markOrderPayment,
     updatePOStatus,
     resetToDefaultData,
     addItem,
@@ -1201,11 +1202,32 @@ const MainApp: React.FC = () => {
                             <button
                               onClick={() => updateBranchOrderStatus(order.id, 'DELIVERED')}
                               className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-2 rounded-xl transition-colors cursor-pointer"
-                              title="ยืนยันว่าส่งมอบถึงสาขาเรียบร้อย (ตัดสต็อกคลัง สนง.ใหญ่)"
+                              title="ยืนยันว่าส่งมอบถึงสาขาเรียบร้อย (ลงรายการรับเข้า/จ่ายออกในบัญชีสต็อก)"
                             >
                               ยืนยันการจัดส่งแล้ว
                             </button>
                           )}
+
+                          <button
+                            onClick={() => {
+                              if (order.paymentStatus === 'PAID') {
+                                if (window.confirm('ยกเลิกสถานะ "จ่ายเงินแล้ว" ของใบนี้?')) markOrderPayment(order.id, false);
+                              } else {
+                                const ref = window.prompt('บันทึกการจ่ายเงิน — เลขที่อ้างอิง/ใบเสร็จ/โอน (ไม่บังคับ)', '');
+                                if (ref !== null) markOrderPayment(order.id, true, ref.trim());
+                              }
+                            }}
+                            className={`text-xs font-bold px-3 py-2 rounded-xl transition-colors cursor-pointer border ${
+                              order.paymentStatus === 'PAID'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                : 'bg-white text-rose-700 border-rose-300 hover:bg-rose-50'
+                            }`}
+                            title="บันทึกการจ่ายเงินค่าสินค้าของใบนี้เพื่อควบคุมงบประมาณ"
+                          >
+                            {order.paymentStatus === 'PAID'
+                              ? `จ่ายเงินแล้ว${order.paidAt ? ' ' + order.paidAt : ''}${order.paymentRef ? ' (' + order.paymentRef + ')' : ''}`
+                              : 'ยังไม่จ่ายเงิน · บันทึกการจ่าย'}
+                          </button>
 
                           <button
                             onClick={() => setOrderToDelete(order)}

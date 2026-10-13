@@ -103,6 +103,9 @@ export interface BranchOrder {
   receiverSignedAt?: string;
   supplierId?: string;
   notes?: string;
+  paymentStatus?: 'UNPAID' | 'PAID'; // การจ่ายเงินให้ Supplier / ค่าสินค้าของใบนี้
+  paidAt?: string;
+  paymentRef?: string;
   smartWarnings?: string[]; // Smart warnings detected for this order
 }
 

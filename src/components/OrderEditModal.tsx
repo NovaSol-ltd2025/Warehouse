@@ -15,17 +15,8 @@ interface OrderEditModalProps {
 
 const fmt = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
-/** จำนวนที่ถูกตัดออกจากสต็อก สนง.ใหญ่ ไปแล้วของใบส่งของนี้ (ตัดเมื่อสถานะ "ส่งแล้ว" และส่งจาก สนง.ใหญ่เท่านั้น) */
-const deductedQty = (o: { status: string; routingType: RoutingType; items: OrderItemDetail[] }) => {
-  const map = new Map<string, number>();
-  if (o.status === 'DELIVERED') {
-    o.items.forEach((it) => map.set(it.itemId, (map.get(it.itemId) || 0) + it.quantity));
-  }
-  return map;
-};
-
 export const OrderEditModal: React.FC<OrderEditModalProps> = ({ order, onClose, onSaved }) => {
-  const { items: catalog, branches, updateBranchOrder, adjustStock } = useInventory();
+  const { items: catalog, branches, updateBranchOrder, reconcileDeliveredOrder } = useInventory();
 
   const [branchId, setBranchId] = useState(order.branchId);
   const [date, setDate] = useState(order.date);
@@ -105,16 +96,8 @@ export const OrderEditModal: React.FC<OrderEditModalProps> = ({ order, onClose, 
     try {
       await updateBranchOrder(updated);
 
-      // ถ้าใบนี้ตัดสต็อกไปแล้ว ให้ปรับสต็อกตามส่วนต่างของรายการที่แก้ เพื่อให้ยอดคงเหลือตรงกับใบส่งของล่าสุด
-      const before = deductedQty(order);
-      const after = deductedQty(updated);
-      const ids = new Set([...before.keys(), ...after.keys()]);
-      for (const id of ids) {
-        const delta = (before.get(id) || 0) - (after.get(id) || 0); // + = คืนสต็อก, - = ตัดเพิ่ม
-        if (delta !== 0) {
-          await adjustStock(id, delta, 'ADJUSTMENT', updated.deliveryOrderNo, `แก้ไขใบส่งของ ${updated.deliveryOrderNo} (ปรับสต็อกตามจำนวนใหม่)`);
-        }
-      }
+      // ใบที่ยืนยันส่งแล้ว: ลงบัญชีสต็อก (รับเข้า/จ่ายออก) ตามส่วนต่างที่แก้
+      await reconcileDeliveredOrder(order, updated);
 
       onSaved?.(updated);
       onClose();
@@ -282,7 +265,7 @@ export const OrderEditModal: React.FC<OrderEditModalProps> = ({ order, onClose, 
 
           {order.status === 'DELIVERED' && (
             <p className="text-[11px] text-slate-500">
-              ใบนี้ยืนยันส่งแล้ว และตัดสต็อกคลัง สนง.ใหญ่ไปแล้ว เมื่อบันทึก ระบบจะปรับสต็อกตามส่วนต่างของจำนวนที่แก้ให้อัตโนมัติ
+              ใบนี้ยืนยันส่งแล้ว เมื่อบันทึก ระบบจะลงรายการรับเข้า/จ่ายออกตามส่วนต่างของจำนวนที่แก้ให้อัตโนมัติ
             </p>
           )}
 

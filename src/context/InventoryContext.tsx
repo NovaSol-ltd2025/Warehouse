@@ -4,6 +4,7 @@ import {
   Supplier,
   Branch,
   BranchOrder,
+  OrderItemDetail,
   PurchaseOrder,
   StockMovement,
   RoutingType,
@@ -82,6 +83,8 @@ interface InventoryContextType {
     }
   ) => Promise<BranchOrder>;
   updateBranchOrderStatus: (id: string, status: BranchOrderStatus) => Promise<void>;
+  markOrderPayment: (id: string, paid: boolean, paymentRef?: string) => Promise<void>;
+  reconcileDeliveredOrder: (before: BranchOrder, after: BranchOrder) => Promise<void>;
   updateBranchOrder: (order: BranchOrder) => Promise<void>;
   deleteBranchOrder: (id: string, restoreStock?: boolean) => Promise<void>;
   createPurchaseOrder: (
@@ -183,6 +186,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
   });
   const [isCloudLoading, setIsCloudLoading] = useState<boolean>(configured);
 
+  const itemsRef = useRef<InventoryItem[]>([]);
+  itemsRef.current = items;
   const connRef = useRef(sheetsConnection);
   const revRef = useRef<number>(-1);
   const pendingWrites = useRef(0);
@@ -389,11 +394,13 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     referenceNo: string = '-',
     notes: string = ''
   ) => {
-    const targetItem = items.find((i) => i.id === itemId);
+    const targetItem = itemsRef.current.find((i) => i.id === itemId);
     if (!targetItem) return;
 
     const newQty = Math.max(0, targetItem.currentStockHQ + delta);
     const updatedItem = { ...targetItem, currentStockHQ: newQty };
+    // อัปเดต ref ทันที เพื่อให้การเรียกต่อเนื่อง (รับเข้า → จ่ายออก) คำนวณจากยอดล่าสุด
+    itemsRef.current = itemsRef.current.map((it) => (it.id === itemId ? updatedItem : it));
 
     const newMovement: StockMovement = {
       id: `MOV-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -451,21 +458,75 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     return newOrder;
   };
 
+  const supplierLabel = (o: BranchOrder) =>
+    suppliers.find((x) => x.id === o.supplierId)?.name || suppliers[0]?.name || 'Supplier';
+
+  /**
+   * ลงบัญชีสต็อกของใบส่งของ
+   * - รวมส่งที่ สนง.ใหญ่: ของเข้าคลังตอนรับ PO อยู่แล้ว → ลงรายการจ่ายออกไปสาขา
+   * - Supplier ส่งตรงสาขา: ลงรายการ "รับเข้า" (ตรวจรับ/จ่ายเงิน) แล้ว "จ่ายออก" ไปสาขาทันที ยอดคงเหลือเท่าเดิมแต่มีประวัติครบ
+   * dir = 1 ตอนยืนยันส่ง, dir = -1 ตอนยกเลิก/ลบ (ย้อนรายการ)
+   */
+  const postDeliveryStock = async (order: BranchOrder, dir: 1 | -1, factor: number = 1) => {
+    const direct = order.routingType === 'SUPPLIER_DIRECT';
+    for (const it of order.items) {
+      const q = it.quantity * factor;
+      if (!q) continue;
+      if (dir === 1) {
+        if (direct) {
+          await adjustStock(it.itemId, q, 'IN_SUPPLIER', order.deliveryOrderNo, `รับเข้าจาก ${supplierLabel(order)} (ส่งตรงสาขา ${order.branchName})`);
+        }
+        await adjustStock(it.itemId, -q, 'OUT_BRANCH', order.deliveryOrderNo, `จัดส่งถึง ${order.branchName}`);
+      } else {
+        await adjustStock(it.itemId, q, 'ADJUSTMENT', order.deliveryOrderNo, `ยกเลิก/แก้ไขใบส่งของ ${order.deliveryOrderNo} คืนรายการจ่ายออก`);
+        if (direct) {
+          await adjustStock(it.itemId, -q, 'ADJUSTMENT', order.deliveryOrderNo, `ยกเลิก/แก้ไขใบส่งของ ${order.deliveryOrderNo} ย้อนรายการรับเข้า`);
+        }
+      }
+    }
+  };
+
+  const reconcileDeliveredOrder = async (before: BranchOrder, after: BranchOrder) => {
+    if (before.status !== 'DELIVERED') return;
+    if (before.routingType !== after.routingType) {
+      await postDeliveryStock(before, -1);
+      await postDeliveryStock(after, 1);
+      return;
+    }
+    const sum = (o: BranchOrder) => {
+      const m = new Map<string, OrderItemDetail>();
+      o.items.forEach((it) => {
+        const cur = m.get(it.itemId);
+        m.set(it.itemId, cur ? { ...cur, quantity: cur.quantity + it.quantity } : { ...it });
+      });
+      return m;
+    };
+    const b = sum(before);
+    const a = sum(after);
+    for (const id of new Set([...b.keys(), ...a.keys()])) {
+      const delta = (a.get(id)?.quantity || 0) - (b.get(id)?.quantity || 0);
+      if (delta === 0) continue;
+      const ref = a.get(id) || b.get(id)!;
+      const one = { ...after, items: [{ ...ref, quantity: Math.abs(delta) }] };
+      await postDeliveryStock(one, delta > 0 ? 1 : -1);
+    }
+  };
+
+  const markOrderPayment = async (id: string, paid: boolean, paymentRef?: string) => {
+    const patch = paid
+      ? { paymentStatus: 'PAID' as const, paidAt: new Date().toISOString().split('T')[0], paymentRef: paymentRef || '' }
+      : { paymentStatus: 'UNPAID' as const, paidAt: '', paymentRef: '' };
+    await commit([{ op: 'upsert', collection: 'branch_orders', id, data: patch, merge: true }]);
+    setBranchOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
+  };
+
   const updateBranchOrderStatus = async (id: string, status: BranchOrderStatus) => {
     const order = branchOrders.find((o) => o.id === id);
     if (!order) return;
 
-    // If status moved to DELIVERED, and it was delivered from HQ stock, deduct from HQ stock
+    // ยืนยันส่งแล้ว: ทุกใบต้องผ่านบัญชีสต็อก (รับเข้า-จ่ายออก) เพื่อควบคุมปริมาณและงบประมาณ
     if (status === 'DELIVERED' && order.status !== 'DELIVERED') {
-      for (const ordItem of order.items) {
-        await adjustStock(
-          ordItem.itemId,
-          -ordItem.quantity,
-          'OUT_BRANCH',
-          order.deliveryOrderNo,
-          `จัดส่งถึง ${order.branchName}`
-        );
-      }
+      await postDeliveryStock(order, 1);
     }
 
     await commit([
@@ -484,15 +545,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     if (!orderToDelete) return;
 
     if (restoreStock && orderToDelete.status === 'DELIVERED') {
-      for (const item of orderToDelete.items) {
-        await adjustStock(
-          item.itemId,
-          item.quantity,
-          'ADJUSTMENT',
-          orderToDelete.deliveryOrderNo,
-          `ยกเลิก/ลบใบส่งของ ${orderToDelete.deliveryOrderNo} คืนสต็อกเข้าคลัง สนง.ใหญ่`
-        );
-      }
+      await postDeliveryStock(orderToDelete, -1);
     }
 
     await commit([{ op: 'delete', collection: 'branch_orders', id }]);
@@ -777,6 +830,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         adjustStock,
         createBranchOrder,
         updateBranchOrderStatus,
+        markOrderPayment,
+        reconcileDeliveredOrder,
         updateBranchOrder,
         deleteBranchOrder,
         createPurchaseOrder,
