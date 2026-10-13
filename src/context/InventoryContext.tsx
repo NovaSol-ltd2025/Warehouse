@@ -56,6 +56,9 @@ interface InventoryContextType {
   testSheetsConnection: (conn: SheetsConnection) => Promise<{ ok: boolean; message: string }>;
 
   // Branch management actions
+  addSupplier: (supplier: Omit<Supplier, 'id'>) => Promise<void>;
+  updateSupplier: (supplier: Supplier) => Promise<void>;
+  deleteSupplier: (id: string) => Promise<void>;
   addBranch: (branch: Omit<Branch, 'id'>) => Promise<void>;
   updateBranch: (branch: Branch) => Promise<void>;
   deleteBranch: (id: string) => Promise<void>;
@@ -320,6 +323,23 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     merge,
   });
 
+  // ================= SUPPLIER ACTIONS =================
+  const addSupplier = async (data: Omit<Supplier, 'id'>) => {
+    const sup: Supplier = { ...data, id: `SUP-${Date.now().toString().slice(-6)}` };
+    await commit([upsert('suppliers', sup)]);
+    setSuppliers((prev) => [...prev, sup]);
+  };
+
+  const updateSupplier = async (sup: Supplier) => {
+    await commit([upsert('suppliers', sup, true)]);
+    setSuppliers((prev) => prev.map((x) => (x.id === sup.id ? sup : x)));
+  };
+
+  const deleteSupplier = async (id: string) => {
+    await commit([{ op: 'delete', collection: 'suppliers', id }]);
+    setSuppliers((prev) => prev.filter((x) => x.id !== id));
+  };
+
   // ================= BRANCH MANAGEMENT ACTIONS =================
   const addBranch = async (branchData: Omit<Branch, 'id'>) => {
     const newBranch: Branch = {
@@ -436,7 +456,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     if (!order) return;
 
     // If status moved to DELIVERED, and it was delivered from HQ stock, deduct from HQ stock
-    if (status === 'DELIVERED' && order.status !== 'DELIVERED' && order.routingType === 'HQ_DELIVERY') {
+    if (status === 'DELIVERED' && order.status !== 'DELIVERED') {
       for (const ordItem of order.items) {
         await adjustStock(
           ordItem.itemId,
@@ -463,7 +483,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     const orderToDelete = branchOrders.find((o) => o.id === id);
     if (!orderToDelete) return;
 
-    if (restoreStock && orderToDelete.status === 'DELIVERED' && orderToDelete.routingType === 'HQ_DELIVERY') {
+    if (restoreStock && orderToDelete.status === 'DELIVERED') {
       for (const item of orderToDelete.items) {
         await adjustStock(
           item.itemId,
@@ -745,6 +765,9 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         saveSheetsConnection,
         refreshFromSheet: () => refreshFromSheet(true),
         testSheetsConnection,
+        addSupplier,
+        updateSupplier,
+        deleteSupplier,
         addBranch,
         updateBranch,
         deleteBranch,

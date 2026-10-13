@@ -18,7 +18,7 @@ const fmt = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: 0,
 /** จำนวนที่ถูกตัดออกจากสต็อก สนง.ใหญ่ ไปแล้วของใบส่งของนี้ (ตัดเมื่อสถานะ "ส่งแล้ว" และส่งจาก สนง.ใหญ่เท่านั้น) */
 const deductedQty = (o: { status: string; routingType: RoutingType; items: OrderItemDetail[] }) => {
   const map = new Map<string, number>();
-  if (o.status === 'DELIVERED' && o.routingType === 'HQ_DELIVERY') {
+  if (o.status === 'DELIVERED') {
     o.items.forEach((it) => map.set(it.itemId, (map.get(it.itemId) || 0) + it.quantity));
   }
   return map;
@@ -280,7 +280,7 @@ export const OrderEditModal: React.FC<OrderEditModalProps> = ({ order, onClose, 
             <textarea className={`${input} mt-1`} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
           </label>
 
-          {order.status === 'DELIVERED' && order.routingType === 'HQ_DELIVERY' && (
+          {order.status === 'DELIVERED' && (
             <p className="text-[11px] text-slate-500">
               ใบนี้ยืนยันส่งแล้ว และตัดสต็อกคลัง สนง.ใหญ่ไปแล้ว เมื่อบันทึก ระบบจะปรับสต็อกตามส่วนต่างของจำนวนที่แก้ให้อัตโนมัติ
             </p>
