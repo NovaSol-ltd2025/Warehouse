@@ -92,6 +92,8 @@ interface InventoryContextType {
     poData: Omit<PurchaseOrder, 'id' | 'poNumber' | 'totalAmount' | 'minAmountMet' | 'status'>
   ) => Promise<PurchaseOrder>;
   updatePOStatus: (id: string, status: POStatus) => Promise<void>;
+  updatePurchaseOrder: (before: PurchaseOrder, after: PurchaseOrder) => Promise<PurchaseOrder>;
+  deletePurchaseOrder: (id: string) => Promise<void>;
   resetToDefaultData: () => Promise<void>;
 
   // Demand & Quota Planning
@@ -609,8 +611,67 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
     }
 
+    // ยกเลิกการตรวจรับ: ย้อนยอดที่รับเข้าคลัง
+    if (po.status === 'RECEIVED' && status !== 'RECEIVED') {
+      await postPOStock(po, -1);
+    }
+
     await commit([{ op: 'upsert', collection: 'purchase_orders', id, data: { status }, merge: true }]);
     setPurchaseOrders((prev) => prev.map((p) => (p.id === id ? { ...p, status } : p)));
+  };
+
+  // ลงบัญชีสต็อกของ PO ที่ตรวจรับแล้ว (dir 1 = รับเข้า, -1 = ย้อนรายการ)
+  const postPOStock = async (po: PurchaseOrder, dir: 1 | -1, only?: OrderItemDetail[]) => {
+    if (po.destination !== 'HQ_WAREHOUSE') return;
+    for (const it of only || po.items) {
+      if (!it.quantity) continue;
+      if (dir === 1) {
+        await adjustStock(it.itemId, it.quantity, 'IN_SUPPLIER', po.poNumber, `รับสินค้าเข้าคลัง สนง.ใหญ่ จาก ${po.supplierName}`);
+      } else {
+        await adjustStock(it.itemId, -it.quantity, 'ADJUSTMENT', po.poNumber, `ยกเลิก/แก้ไข ${po.poNumber} ย้อนรายการรับเข้า`);
+      }
+    }
+  };
+
+  const updatePurchaseOrder = async (before: PurchaseOrder, after: PurchaseOrder) => {
+    const totalAmount = after.items.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
+    const updated: PurchaseOrder = { ...after, totalAmount, minAmountMet: totalAmount >= 5000 };
+
+    if (before.status === 'RECEIVED') {
+      if (before.destination !== updated.destination) {
+        await postPOStock(before, -1);
+        await postPOStock(updated, 1);
+      } else {
+        const sum = (po: PurchaseOrder) => {
+          const m = new Map<string, OrderItemDetail>();
+          po.items.forEach((it) => {
+            const cur = m.get(it.itemId);
+            m.set(it.itemId, cur ? { ...cur, quantity: cur.quantity + it.quantity } : { ...it });
+          });
+          return m;
+        };
+        const b = sum(before);
+        const a = sum(updated);
+        for (const id of new Set([...b.keys(), ...a.keys()])) {
+          const delta = (a.get(id)?.quantity || 0) - (b.get(id)?.quantity || 0);
+          if (delta === 0) continue;
+          const ref = a.get(id) || b.get(id)!;
+          await postPOStock(updated, delta > 0 ? 1 : -1, [{ ...ref, quantity: Math.abs(delta) }]);
+        }
+      }
+    }
+
+    await commit([upsert('purchase_orders', updated, true)]);
+    setPurchaseOrders((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    return updated;
+  };
+
+  const deletePurchaseOrder = async (id: string) => {
+    const po = purchaseOrders.find((p) => p.id === id);
+    if (!po) return;
+    if (po.status === 'RECEIVED') await postPOStock(po, -1);
+    await commit([{ op: 'delete', collection: 'purchase_orders', id }]);
+    setPurchaseOrders((prev) => prev.filter((p) => p.id !== id));
   };
 
   // ================= DEMAND & QUOTA ACTIONS =================
@@ -850,6 +911,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         deleteBranchOrder,
         createPurchaseOrder,
         updatePOStatus,
+        updatePurchaseOrder,
+        deletePurchaseOrder,
         resetToDefaultData,
         calculateReorderSuggestion,
         setBranchDemand,

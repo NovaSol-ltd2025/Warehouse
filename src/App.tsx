@@ -55,6 +55,7 @@ import { BranchDemandPlanningTab } from './components/BranchDemandPlanningTab';
 import { BranchManagementTab } from './components/BranchManagementTab';
 import { SupplierManagementTab } from './components/SupplierManagementTab';
 import { BudgetReportTab } from './components/BudgetReportTab';
+import { PurchaseOrderEditModal } from './components/PurchaseOrderEditModal';
 import { Wallet } from 'lucide-react';
 import { Factory } from 'lucide-react';
 import { processLocalImageFile, convertToLh3Url } from './utils/imageHelper';
@@ -72,6 +73,8 @@ const MainApp: React.FC = () => {
     updateBranchOrderStatus,
     markOrderPayment,
     updatePOStatus,
+    deletePurchaseOrder,
+    markPOPayment,
     resetToDefaultData,
     addItem,
     deleteBranchOrder,
@@ -93,6 +96,7 @@ const MainApp: React.FC = () => {
   // Order deletion confirmation state
   const [orderToDelete, setOrderToDelete] = useState<BranchOrder | null>(null);
   const [orderToEdit, setOrderToEdit] = useState<BranchOrder | null>(null);
+  const [poToEdit, setPoToEdit] = useState<PurchaseOrder | null>(null);
 
   // Modals state
   const [showAutoReorderModal, setShowAutoReorderModal] = useState(false);
@@ -1453,8 +1457,8 @@ const MainApp: React.FC = () => {
                           <div className="text-lg font-extrabold text-blue-900">
                             {po.totalAmount.toLocaleString()} ฿
                           </div>
-                          <span className="text-[11px] text-emerald-600 font-semibold">
-                            (ผ่านเกณฑ์ขั้นต่ำ 5,000 บาท)
+                          <span className={`text-[11px] font-semibold ${po.minAmountMet ? 'text-emerald-600' : 'text-amber-600'}`}>
+                            {po.minAmountMet ? '(ผ่านเกณฑ์ขั้นต่ำ 5,000 บาท)' : '(ต่ำกว่าเกณฑ์ขั้นต่ำ 5,000 บาท)'}
                           </span>
                         </div>
 
@@ -1467,6 +1471,60 @@ const MainApp: React.FC = () => {
                             <span>ตรวจรับสินค้าเข้าสต็อก สนง.ใหญ่</span>
                           </button>
                         )}
+
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          <button
+                            onClick={() => setPoToEdit(po)}
+                            className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3 py-2 rounded-xl cursor-pointer"
+                            title="แก้ไขรายการ จำนวน ราคา วันที่ ของ PO นี้"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>แก้ไข</span>
+                          </button>
+                          {po.status === 'RECEIVED' && (
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`ยกเลิกการตรวจรับ ${po.poNumber}?\nระบบจะย้อนรายการรับเข้าคลัง และเปลี่ยนสถานะกลับเป็น "กำลังจัดส่ง"`))
+                                  updatePOStatus(po.id, 'IN_TRANSIT');
+                              }}
+                              className="text-xs font-bold px-3 py-2 rounded-xl bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 cursor-pointer"
+                            >
+                              ยกเลิกการตรวจรับ
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              if (po.paymentStatus === 'PAID') {
+                                if (window.confirm('ยกเลิกสถานะ "จ่ายเงินแล้ว" ของ PO นี้?')) markPOPayment(po.id, false);
+                              } else {
+                                const ref = window.prompt('บันทึกการจ่ายเงิน — เลขที่อ้างอิง/ใบเสร็จ/โอน (ไม่บังคับ)', '');
+                                if (ref !== null) markPOPayment(po.id, true, ref.trim());
+                              }
+                            }}
+                            className={`text-xs font-bold px-3 py-2 rounded-xl border cursor-pointer ${
+                              po.paymentStatus === 'PAID'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                : 'bg-white text-rose-700 border-rose-300 hover:bg-rose-50'
+                            }`}
+                          >
+                            {po.paymentStatus === 'PAID'
+                              ? `จ่ายเงินแล้ว${po.paidAt ? ' ' + po.paidAt : ''}${po.paymentRef ? ' (' + po.paymentRef + ')' : ''}`
+                              : 'ยังไม่จ่ายเงิน · บันทึกการจ่าย'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              const msg =
+                                po.status === 'RECEIVED' && po.destination === 'HQ_WAREHOUSE'
+                                  ? `ลบ ${po.poNumber}?\nใบนี้ตรวจรับเข้าคลังแล้ว ระบบจะย้อนรายการรับเข้า (หักสต็อกที่รับเข้ามาคืน)`
+                                  : `ลบ ${po.poNumber}?`;
+                              if (window.confirm(msg)) deletePurchaseOrder(po.id);
+                            }}
+                            className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl border border-rose-200 cursor-pointer"
+                            title="ลบใบสั่งซื้อนี้"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -1579,6 +1637,8 @@ const MainApp: React.FC = () => {
       {/* ========================================================= */}
 
       {/* 1. Printable Delivery Slip Modal (matches exact uploaded PDF sample) */}
+      {poToEdit && <PurchaseOrderEditModal po={poToEdit} onClose={() => setPoToEdit(null)} />}
+
       {orderToEdit && (
         <OrderEditModal order={orderToEdit} onClose={() => setOrderToEdit(null)} />
       )}
