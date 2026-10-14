@@ -859,6 +859,9 @@ const MainApp: React.FC = () => {
                             >
                               {item.name}
                             </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              Supplier: {suppliers.find((sp) => sp.id === item.supplierId)?.name || 'ไม่ระบุ'}
+                            </div>
                             
                             {/* Variant Specs & Branch Rules */}
                             <div className="flex flex-wrap items-center gap-1.5 mt-1">

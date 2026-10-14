@@ -29,12 +29,13 @@ interface ItemDetailModalProps {
 }
 
 export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({ item, onClose }) => {
-  const { updateItem, branches, items: allItems } = useInventory();
+  const { updateItem, branches, items: allItems, suppliers } = useInventory();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form states
   const [name, setName] = useState(item.name);
   const [unit, setUnit] = useState(item.unit);
+  const [supplierId, setSupplierId] = useState(item.supplierId || '');
   const [category, setCategory] = useState<ItemCategory>(item.category);
   const [unitPrice, setUnitPrice] = useState(item.unitPrice);
   const [baselinePrice, setBaselinePrice] = useState(item.baselinePrice || item.unitPrice);
@@ -65,7 +66,7 @@ export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({ item, onClose 
       {
         date: new Date().toISOString().split('T')[0],
         price: item.unitPrice,
-        supplierName: 'บริษัท คงธนา เซอร์วิส จำกัด',
+        supplierName: suppliers.find((x) => x.id === item.supplierId)?.name || suppliers[0]?.name || 'ไม่ระบุ Supplier',
         note: 'ราคาปัจจุบัน',
       },
     ]
@@ -81,13 +82,24 @@ export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({ item, onClose 
     }));
   };
 
+  const selectedSupplierName =
+    suppliers.find((x) => x.id === supplierId)?.name || suppliers[0]?.name || 'ไม่ระบุ Supplier';
+
+  // ราคาล่าสุดที่เคยได้รับจากแต่ละ Supplier (จากประวัติราคา) เพื่อเปรียบเทียบก่อนเปลี่ยน
+  const supplierPrices = suppliers.map((sp) => {
+    const rec = priceHistory.filter((h) => h.supplierName === sp.name).sort((a, b) => b.date.localeCompare(a.date))[0];
+    return { sp, price: rec?.price, date: rec?.date };
+  });
+  const knownPrices = supplierPrices.filter((x) => x.price !== undefined).map((x) => x.price as number);
+  const cheapest = knownPrices.length ? Math.min(...knownPrices) : undefined;
+
   // Add new price entry
   const handleAddPriceHistory = () => {
     if (!newHistoryPrice) return;
     const newRecord: PriceHistoryRecord = {
       date: new Date().toISOString().split('T')[0],
       price: Number(newHistoryPrice),
-      supplierName: 'บริษัท คงธนา เซอร์วิส จำกัด',
+      supplierName: selectedSupplierName,
       note: newHistoryNote || (newHistoryPrice > unitPrice ? 'ราคาปรับขึ้น' : 'ราคาปรับลด'),
     };
     setPriceHistory((prev) => [newRecord, ...prev]);
@@ -129,8 +141,27 @@ export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({ item, onClose 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
 
+    // บันทึกประวัติราคาอัตโนมัติเมื่อเปลี่ยน Supplier หรือราคา เพื่อใช้เปรียบเทียบภายหลัง
+    let history = priceHistory;
+    const latest = [...history].sort((a, b) => b.date.localeCompare(a.date))[0];
+    const supplierChanged = supplierId !== (item.supplierId || '');
+    if (supplierChanged || !latest || latest.price !== Number(unitPrice) || latest.supplierName !== selectedSupplierName) {
+      if (supplierChanged || Number(unitPrice) !== item.unitPrice) {
+        history = [
+          {
+            date: new Date().toISOString().split('T')[0],
+            price: Number(unitPrice),
+            supplierName: selectedSupplierName,
+            note: supplierChanged ? `เปลี่ยน Supplier เป็น ${selectedSupplierName}` : 'ปรับราคา',
+          },
+          ...history,
+        ];
+      }
+    }
+
     const updatedItem: InventoryItem = {
       ...item,
+      supplierId: supplierId || item.supplierId,
       name,
       unit: unit.trim() || item.unit,
       category,
@@ -147,7 +178,7 @@ export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({ item, onClose 
         ...branchNotes,
         [selectedBranchId]: currentBranchNote,
       },
-      priceHistory,
+      priceHistory: history,
       notes,
     };
 
@@ -420,6 +451,38 @@ export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({ item, onClose 
                   </span>
                 )}
               </div>
+            </div>
+
+            <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3 space-y-2">
+              <label className="block text-xs font-semibold text-slate-700">
+                Supplier ผู้จัดจำหน่ายที่สั่งซื้อสินค้านี้
+                <select
+                  value={supplierId}
+                  onChange={(e) => setSupplierId(e.target.value)}
+                  className="mt-1 w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {!suppliers.some((x) => x.id === supplierId) && <option value={supplierId}>{supplierId ? `(ไม่พบ Supplier ${supplierId})` : '— ยังไม่ระบุ —'}</option>}
+                  {suppliers.map((sp) => (
+                    <option key={sp.id} value={sp.id}>{sp.name}</option>
+                  ))}
+                </select>
+              </label>
+              {suppliers.length > 1 && (
+                <div className="text-[11px] text-slate-600">
+                  <div className="font-semibold mb-1">เปรียบเทียบราคาล่าสุดที่เคยมี (จากประวัติราคา)</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                    {supplierPrices.map(({ sp, price, date }) => (
+                      <div key={sp.id} className={`flex justify-between gap-2 rounded-lg px-2 py-1 border ${sp.id === supplierId ? 'border-blue-400 bg-white' : 'border-transparent'}`}>
+                        <span className="truncate">{sp.name}</span>
+                        <span className={`font-bold whitespace-nowrap ${price !== undefined && price === cheapest && knownPrices.length > 1 ? 'text-emerald-700' : 'text-slate-800'}`}>
+                          {price !== undefined ? `${price.toLocaleString()} ฿${date ? ` (${date})` : ''}${price === cheapest && knownPrices.length > 1 ? ' · ถูกสุด' : ''}` : 'ยังไม่มีราคา'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-1 text-slate-500">เมื่อเปลี่ยน Supplier ให้ปรับ "ราคาซื้อปัจจุบัน" ด้านล่างเป็นราคาของ Supplier ใหม่ด้วย ระบบจะบันทึกลงประวัติราคาให้</div>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
