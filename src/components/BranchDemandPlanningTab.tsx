@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { minOrderLabel } from '../utils/payment';
 import { useInventory } from '../context/InventoryContext';
 import { BranchMonthlyDemand, InventoryItem, Branch } from '../types/inventory';
 import {
@@ -730,7 +731,7 @@ export const BranchDemandPlanningTab: React.FC<BranchDemandPlanningTabProps> = (
                   คำนวณการสั่งซื้อ Supplier รวมจากความต้องการสาขาที่ขาด
                 </h3>
                 <p className="text-xs sm:text-sm text-indigo-200 mt-1 leading-relaxed">
-                  ระบบวิเคราะห์จาก: <strong>[ความต้องการรวมทุกสาขาเดือนนี้ - สต็อกคงเหลือ สนง.ใหญ่]</strong> เพื่อสรุปยอดที่ต้องสั่งซื้อจริง พร้อมตรวจสอบเกณฑ์จัดส่งฟรี 5,000 บาท กับ บริษัท คงธนา เซอร์วิส จำกัด
+                  ระบบวิเคราะห์จาก: <strong>[ความต้องการรวมทุกสาขาเดือนนี้ - สต็อกคงเหลือ สนง.ใหญ่]</strong> เพื่อสรุปยอดที่ต้องสั่งซื้อจริง พร้อมตรวจสอบเงื่อนไขขั้นต่ำ ({minOrderLabel(procurementDeficit.supplier)}) กับ {procurementDeficit.supplier.name}
                 </p>
               </div>
 
@@ -743,11 +744,11 @@ export const BranchDemandPlanningTab: React.FC<BranchDemandPlanningTabProps> = (
                 <div className="mt-1">
                   {procurementDeficit.isMinMet ? (
                     <span className="bg-emerald-500/30 text-emerald-300 text-[11px] font-bold px-2 py-0.5 rounded-full border border-emerald-400/40">
-                      ✓ ครบเกณฑ์ขั้นต่ำ 5,000 บาท (Supplier ส่งฟรี)
+                      ✓ ครบเงื่อนไข ({minOrderLabel(procurementDeficit.supplier)})
                     </span>
                   ) : (
                     <span className="bg-amber-500/30 text-amber-300 text-[11px] font-bold px-2 py-0.5 rounded-full border border-amber-400/40">
-                      ขาดอีก {procurementDeficit.differenceToMin.toLocaleString()} บาท จะครบ 5,000 บาท
+                      ขาดอีก {procurementDeficit.differenceToMin.toLocaleString()} บาท จะครบขั้นต่ำ {Number(procurementDeficit.supplier.minOrderAmount).toLocaleString()} บาท
                     </span>
                   )}
                 </div>

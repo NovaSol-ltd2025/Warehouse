@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { termsLabel, minOrderLabel } from '../utils/payment';
 import { useInventory } from '../context/InventoryContext';
 import { InventoryItem, OrderItemDetail } from '../types/inventory';
 import {
@@ -112,7 +113,7 @@ export const AutoReorderModal: React.FC<AutoReorderModalProps> = ({
   };
 
   // Calculations
-  const minRequiredAmount = supplier?.minOrderAmount || 5000;
+  const minRequiredAmount = supplier?.minOrderAmount ?? 0;
   const totalAmount = useMemo(
     () => orderItems.reduce((acc, curr) => acc + curr.quantity * curr.unitPrice, 0),
     [orderItems]
@@ -216,7 +217,8 @@ export const AutoReorderModal: React.FC<AutoReorderModalProps> = ({
     return `เรียน ${supplier.name}\n` +
       `เรื่อง สั่งซื้อวัสดุอุปกรณ์ทำความสะอาด (ระบบควบคุมคลังสินค้า โนวาโซล)\n\n` +
       `รายการสั่งซื้อ:\n${list}\n\n` +
-      `ยอดรวมทั้งสิ้น: ${totalAmount.toLocaleString()} บาท (ขั้นต่ำ 5,000 บาท: ${isMinMet ? 'ผ่านเกณฑ์' : 'ไม่ถึง'})\n` +
+      `ยอดรวมทั้งสิ้น: ${totalAmount.toLocaleString()} บาท (${minOrderLabel(supplier)}: ${isMinMet ? 'ผ่านเกณฑ์' : 'ไม่ถึง'})\n` +
+      `เงื่อนไขชำระเงิน: ${termsLabel(supplier)}\n` +
       `สถานที่จัดส่ง: ${
         destination === 'DIRECT_BRANCH'
           ? `ส่งตรงถึงสาขา: ${targetBranch?.name} (${targetBranch?.address})`
@@ -282,7 +284,7 @@ export const AutoReorderModal: React.FC<AutoReorderModalProps> = ({
               </select>
               <div className="mt-2 text-xs text-slate-500 flex items-center justify-between">
                 <span>โทร: {supplier.phone}</span>
-                <span className="text-blue-700 font-medium">เงื่อนไข: ขั้นต่ำ 5,000 บาท</span>
+                <span className="text-blue-700 font-medium">{minOrderLabel(supplier)} · {termsLabel(supplier)}</span>
               </div>
             </div>
 
@@ -384,13 +386,13 @@ export const AutoReorderModal: React.FC<AutoReorderModalProps> = ({
               <div>
                 <div className="font-bold text-sm sm:text-base">
                   {isMinMet
-                    ? `ยอดสั่งซื้อรวม ${totalAmount.toLocaleString()} บาท (ผ่านเกณฑ์ขั้นต่ำ 5,000 บาท)`
+                    ? `ยอดสั่งซื้อรวม ${totalAmount.toLocaleString()} บาท (${minRequiredAmount > 0 ? `ผ่านเกณฑ์ขั้นต่ำ ${minRequiredAmount.toLocaleString()} บาท` : 'ไม่มีขั้นต่ำ'})`
                     : `ยอดสั่งซื้อรวม ${totalAmount.toLocaleString()} บาท (ยังขาดอีก ${differenceToMin.toLocaleString()} บาท)`}
                 </div>
                 <div className="text-xs text-slate-600 mt-0.5">
                   {isMinMet
-                    ? 'เงื่อนไข Supplier: ครบยอด 5,000 บาท พร้อมส่งใบสั่งซื้อและจัดส่งฟรีทันที'
-                    : 'Supplier บริษัท คงธนา เซอร์วิส จำกัด มีเงื่อนไขสั่งขั้นต่ำ 5,000 บาท'}
+                    ? `เงื่อนไข Supplier: ${minOrderLabel(supplier)} · ชำระเงิน: ${termsLabel(supplier)}`
+                    : `${supplier.name} มีเงื่อนไขสั่งขั้นต่ำ ${minRequiredAmount.toLocaleString()} บาท`}
                 </div>
               </div>
             </div>
@@ -402,7 +404,7 @@ export const AutoReorderModal: React.FC<AutoReorderModalProps> = ({
                 className="flex items-center justify-center gap-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-all shrink-0 cursor-pointer"
               >
                 <Sparkles className="w-4 h-4 text-amber-200" />
-                <span>เติมสินค้าหมุนเวียนเร็วให้ครบ 5,000 ฿ (Smart Top-up)</span>
+                <span>เติมสินค้าหมุนเวียนเร็วให้ครบ {minRequiredAmount.toLocaleString()} ฿ (Smart Top-up)</span>
               </button>
             )}
           </div>

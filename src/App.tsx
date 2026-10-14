@@ -54,6 +54,8 @@ import { LiveGoogleSheetStatusBar } from './components/LiveGoogleSheetStatusBar'
 import { BranchDemandPlanningTab } from './components/BranchDemandPlanningTab';
 import { BranchManagementTab } from './components/BranchManagementTab';
 import { SupplierManagementTab } from './components/SupplierManagementTab';
+import { PaymentButton } from './components/PaymentButton';
+import { termsLabel, minOrderLabel } from './utils/payment';
 import { BudgetReportTab } from './components/BudgetReportTab';
 import { PurchaseOrderEditModal } from './components/PurchaseOrderEditModal';
 import { Wallet } from 'lucide-react';
@@ -75,6 +77,8 @@ const MainApp: React.FC = () => {
     updatePOStatus,
     deletePurchaseOrder,
     markPOPayment,
+    planForPO,
+    planForOrder,
     resetToDefaultData,
     addItem,
     deleteBranchOrder,
@@ -1261,26 +1265,13 @@ const MainApp: React.FC = () => {
                             </button>
                           )}
 
-                          <button
-                            onClick={() => {
-                              if (order.paymentStatus === 'PAID') {
-                                if (window.confirm('ยกเลิกสถานะ "จ่ายเงินแล้ว" ของใบนี้?')) markOrderPayment(order.id, false);
-                              } else {
-                                const ref = window.prompt('บันทึกการจ่ายเงิน — เลขที่อ้างอิง/ใบเสร็จ/โอน (ไม่บังคับ)', '');
-                                if (ref !== null) markOrderPayment(order.id, true, ref.trim());
-                              }
-                            }}
-                            className={`text-xs font-bold px-3 py-2 rounded-xl transition-colors cursor-pointer border ${
-                              order.paymentStatus === 'PAID'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                                : 'bg-white text-rose-700 border-rose-300 hover:bg-rose-50'
-                            }`}
-                            title="บันทึกการจ่ายเงินค่าสินค้าของใบนี้เพื่อควบคุมงบประมาณ"
-                          >
-                            {order.paymentStatus === 'PAID'
-                              ? `จ่ายเงินแล้ว${order.paidAt ? ' ' + order.paidAt : ''}${order.paymentRef ? ' (' + order.paymentRef + ')' : ''}`
-                              : 'ยังไม่จ่ายเงิน · บันทึกการจ่าย'}
-                          </button>
+                          {order.routingType === 'SUPPLIER_DIRECT' && (
+                            <PaymentButton
+                              plan={planForOrder(order)}
+                              onPay={(ref) => markOrderPayment(order.id, true, ref)}
+                              onReset={() => markOrderPayment(order.id, false)}
+                            />
+                          )}
 
                           <button
                             onClick={() => setOrderToDelete(order)}
@@ -1397,7 +1388,7 @@ const MainApp: React.FC = () => {
                   คำสั่งซื้อ Supplier (PO) & ติดตามการจัดส่ง 7 วัน
                 </h2>
                 <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-                  สั่งซื้อของเพิ่มผ่านระบบออนไลน์ &bull; ผู้จัดจำหน่าย: บริษัท คงธนา เซอร์วิส จำกัด &bull; ขั้นต่ำ 5,000 บาท
+                  สั่งซื้อของเพิ่มผ่านระบบออนไลน์ &bull; ผู้จัดจำหน่าย: ดูเงื่อนไขขั้นต่ำและการชำระเงินของแต่ละราย ในเมนู Supplier
                 </p>
               </div>
 
@@ -1461,7 +1452,7 @@ const MainApp: React.FC = () => {
                             {po.totalAmount.toLocaleString()} ฿
                           </div>
                           <span className={`text-[11px] font-semibold ${po.minAmountMet ? 'text-emerald-600' : 'text-amber-600'}`}>
-                            {po.minAmountMet ? '(ผ่านเกณฑ์ขั้นต่ำ 5,000 บาท)' : '(ต่ำกว่าเกณฑ์ขั้นต่ำ 5,000 บาท)'}
+                            {(() => { const sp = suppliers.find((x) => x.id === po.supplierId); return `${po.minAmountMet ? 'ผ่านเกณฑ์' : 'ต่ำกว่าเกณฑ์'} (${minOrderLabel(sp)}) · ${termsLabel(sp)}`; })()}
                           </span>
                         </div>
 
@@ -1495,25 +1486,11 @@ const MainApp: React.FC = () => {
                               ยกเลิกการตรวจรับ
                             </button>
                           )}
-                          <button
-                            onClick={() => {
-                              if (po.paymentStatus === 'PAID') {
-                                if (window.confirm('ยกเลิกสถานะ "จ่ายเงินแล้ว" ของ PO นี้?')) markPOPayment(po.id, false);
-                              } else {
-                                const ref = window.prompt('บันทึกการจ่ายเงิน — เลขที่อ้างอิง/ใบเสร็จ/โอน (ไม่บังคับ)', '');
-                                if (ref !== null) markPOPayment(po.id, true, ref.trim());
-                              }
-                            }}
-                            className={`text-xs font-bold px-3 py-2 rounded-xl border cursor-pointer ${
-                              po.paymentStatus === 'PAID'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                                : 'bg-white text-rose-700 border-rose-300 hover:bg-rose-50'
-                            }`}
-                          >
-                            {po.paymentStatus === 'PAID'
-                              ? `จ่ายเงินแล้ว${po.paidAt ? ' ' + po.paidAt : ''}${po.paymentRef ? ' (' + po.paymentRef + ')' : ''}`
-                              : 'ยังไม่จ่ายเงิน · บันทึกการจ่าย'}
-                          </button>
+                          <PaymentButton
+                            plan={planForPO(po)}
+                            onPay={(ref) => markPOPayment(po.id, true, ref)}
+                            onReset={() => markPOPayment(po.id, false)}
+                          />
                           <button
                             onClick={() => {
                               const msg =

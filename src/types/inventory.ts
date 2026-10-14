@@ -49,9 +49,24 @@ export interface Supplier {
   phone: string;
   email: string;
   address: string;
-  minOrderAmount: number; // 5,000 THB
+  minOrderAmount: number; // ยอดสั่งซื้อขั้นต่ำ (บาท) — 0 = ไม่มีขั้นต่ำ
   deliveryLeadTime: number; // 7 days
+  paymentTermType?: PaymentTermType; // เงื่อนไขการชำระเงิน (ไม่ระบุ = ชำระทันที)
+  creditDays?: number; // เครดิต (วัน) — ใช้กับ CREDIT และเป็นระยะก่อนงวดแรกของ INSTALLMENT
+  installmentCount?: number; // จำนวนงวด (INSTALLMENT)
+  installmentIntervalDays?: number; // ระยะห่างระหว่างงวด (วัน)
   notes?: string;
+}
+
+export type PaymentTermType = 'IMMEDIATE' | 'CREDIT' | 'INSTALLMENT';
+
+export interface PaymentInstallment {
+  seq: number;
+  dueDate: string;
+  amount: number;
+  paid: boolean;
+  paidAt?: string;
+  paymentRef?: string;
 }
 
 export interface Branch {
@@ -103,7 +118,8 @@ export interface BranchOrder {
   receiverSignedAt?: string;
   supplierId?: string;
   notes?: string;
-  paymentStatus?: 'UNPAID' | 'PAID'; // การจ่ายเงินให้ Supplier / ค่าสินค้าของใบนี้
+  paymentStatus?: 'UNPAID' | 'PAID'; // การจ่ายเงินให้ Supplier / ค่าสินค้าของใบนี้ (PAID เมื่อจ่ายครบทุกงวด)
+  paymentPlan?: PaymentInstallment[]; // ตารางกำหนดจ่ายตามเงื่อนไข Supplier
   paidAt?: string;
   paymentRef?: string;
   smartWarnings?: string[]; // Smart warnings detected for this order
@@ -128,6 +144,7 @@ export interface PurchaseOrder {
   notes?: string;
   smartPriceWarnings?: string[]; // Price increase alerts
   paymentStatus?: 'UNPAID' | 'PAID';
+  paymentPlan?: PaymentInstallment[];
   paidAt?: string;
   paymentRef?: string;
 }

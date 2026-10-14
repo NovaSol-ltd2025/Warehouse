@@ -1,6 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { Wallet, Download, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useInventory } from '../context/InventoryContext';
+import { PaymentInstallment } from '../types/inventory';
+import { planSummary, termsLabel, todayYmd, addDays } from '../utils/payment';
+import { fmtDate } from './PaymentButton';
 
 type Doc = {
   key: string;
@@ -14,6 +17,8 @@ type Doc = {
   paid: boolean;
   paidAt?: string;
   paymentRef?: string;
+  plan: PaymentInstallment[];
+  terms: string;
 };
 
 const fmt = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -32,7 +37,7 @@ const readBudget = (): Record<string, number> => {
 };
 
 export const BudgetReportTab: React.FC = () => {
-  const { purchaseOrders, branchOrders, items, suppliers, markOrderPayment, markPOPayment } = useInventory();
+  const { purchaseOrders, branchOrders, items, suppliers, markOrderPayment, markPOPayment, planForPO, planForOrder, supplierOfOrder } = useInventory();
   const nowYm = new Date().toISOString().slice(0, 7);
   const [month, setMonth] = useState(nowYm);
   const [filter, setFilter] = useState<'ALL' | 'UNPAID' | 'PAID'>('ALL');
@@ -63,9 +68,11 @@ export const BudgetReportTab: React.FC = () => {
         supplier: po.supplierName || supplierName(po.supplierId) || 'ไม่ระบุ Supplier',
         target: po.destination === 'DIRECT_BRANCH' ? po.targetBranchName || 'สาขา' : 'คลัง สนง.ใหญ่',
         amount: po.totalAmount,
-        paid: po.paymentStatus === 'PAID',
+        paid: planSummary(planForPO(po)).allPaid,
         paidAt: po.paidAt,
         paymentRef: po.paymentRef,
+        plan: planForPO(po),
+        terms: termsLabel(suppliers.find((x) => x.id === po.supplierId)),
       });
     });
     branchOrders.forEach((o) => {
@@ -77,12 +84,14 @@ export const BudgetReportTab: React.FC = () => {
         id: o.id,
         no: o.deliveryOrderNo,
         date: o.date,
-        supplier: supplierName(o.supplierId) || supplierName(firstItem?.supplierId) || 'ไม่ระบุ Supplier',
+        supplier: supplierOfOrder(o)?.name || supplierName(firstItem?.supplierId) || 'ไม่ระบุ Supplier',
         target: o.branchName,
         amount: o.totalAmount,
-        paid: o.paymentStatus === 'PAID',
+        paid: planSummary(planForOrder(o)).allPaid,
         paidAt: o.paidAt,
         paymentRef: o.paymentRef,
+        plan: planForOrder(o),
+        terms: termsLabel(supplierOfOrder(o)),
       });
     });
     return out.sort((a, b) => b.date.localeCompare(a.date));
@@ -90,21 +99,44 @@ export const BudgetReportTab: React.FC = () => {
 
   const monthDocs = docs.filter((d) => d.date.slice(0, 7) === month);
   const spend = monthDocs.reduce((s, d) => s + d.amount, 0);
-  const paidAmt = monthDocs.filter((d) => d.paid).reduce((s, d) => s + d.amount, 0);
+  const paidAmt = monthDocs.reduce((s, d) => s + planSummary(d.plan).paidAmount, 0);
   const unpaidAmt = spend - paidAmt;
-  const allUnpaid = docs.filter((d) => !d.paid);
-  const allUnpaidAmt = allUnpaid.reduce((s, d) => s + d.amount, 0);
   const pct = budget > 0 ? (spend / budget) * 100 : 0;
 
+  // ตารางกำหนดจ่ายที่ยังไม่ชำระ (ทุกเดือน) เรียงตามวันครบกำหนด เพื่อวางแผนเงินสดหมุนเวียน
+  const today = todayYmd();
+  const dueRows = useMemo(
+    () =>
+      docs
+        .flatMap((d) => d.plan.filter((p) => !p.paid).map((p) => ({ d, p })))
+        .sort((a, b) => a.p.dueDate.localeCompare(b.p.dueDate)),
+    [docs]
+  );
+  const allUnpaidAmt = dueRows.reduce((s, r) => s + r.p.amount, 0);
+  const overdueRows = dueRows.filter((r) => r.p.dueDate < today);
+  const overdueAmt = overdueRows.reduce((s, r) => s + r.p.amount, 0);
+  const soonLimit = addDays(today, 7);
+  const soonAmt = dueRows.filter((r) => r.p.dueDate >= today && r.p.dueDate <= soonLimit).reduce((s, r) => s + r.p.amount, 0);
+  const cashByMonth = useMemo(() => {
+    const m = new Map<string, number>();
+    dueRows.forEach((r) => {
+      const ym = r.p.dueDate < today ? 'เกินกำหนด' : r.p.dueDate.slice(0, 7);
+      m.set(ym, (m.get(ym) || 0) + r.p.amount);
+    });
+    return [...m.entries()];
+  }, [dueRows, today]);
+
   const bySupplier = useMemo(() => {
-    const m = new Map<string, { total: number; unpaid: number; count: number; oldest: string }>();
+    const m = new Map<string, { total: number; unpaid: number; count: number; oldest: string; terms: string }>();
     docs.forEach((d) => {
-      const cur = m.get(d.supplier) || { total: 0, unpaid: 0, count: 0, oldest: '' };
+      const cur = m.get(d.supplier) || { total: 0, unpaid: 0, count: 0, oldest: '', terms: d.terms };
       if (d.date.slice(0, 7) === month) cur.total += d.amount;
-      if (!d.paid) {
-        cur.unpaid += d.amount;
+      const un = d.plan.filter((p) => !p.paid);
+      if (un.length) {
+        cur.unpaid += un.reduce((s, p) => s + p.amount, 0);
         cur.count += 1;
-        if (!cur.oldest || d.date < cur.oldest) cur.oldest = d.date;
+        const first = un[0].dueDate;
+        if (!cur.oldest || first < cur.oldest) cur.oldest = first;
       }
       m.set(d.supplier, cur);
     });
@@ -137,31 +169,40 @@ export const BudgetReportTab: React.FC = () => {
 
   const shown = monthDocs.filter((d) => (filter === 'ALL' ? true : filter === 'PAID' ? d.paid : !d.paid));
 
-  const togglePay = (d: Doc) => {
+  const payInst = (d: Doc, p: PaymentInstallment) => {
     const fn = d.kind === 'PO' ? markPOPayment : markOrderPayment;
-    if (d.paid) {
-      if (window.confirm('ยกเลิกสถานะ "จ่ายเงินแล้ว"?')) fn(d.id, false);
+    if (p.paid) {
+      if (window.confirm('ยกเลิกสถานะ "จ่ายแล้ว" ของงวดนี้?')) fn(d.id, false, '', p.seq);
     } else {
-      const ref = window.prompt('บันทึกการจ่ายเงิน — เลขที่อ้างอิง/ใบเสร็จ/โอน (ไม่บังคับ)', '');
-      if (ref !== null) fn(d.id, true, ref.trim());
+      const ref = window.prompt(
+        `บันทึกการจ่าย ${d.no}${d.plan.length > 1 ? ` งวดที่ ${p.seq}/${d.plan.length}` : ''} จำนวน ${fmt(p.amount)} ฿\nเลขที่อ้างอิง/ใบเสร็จ/โอน (ไม่บังคับ)`,
+        ''
+      );
+      if (ref !== null) fn(d.id, true, ref.trim(), p.seq);
     }
   };
 
   const exportCsv = () => {
     const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = [
-      ['ประเภท', 'เลขที่', 'วันที่', 'Supplier', 'ปลายทาง', 'ยอด (บาท)', 'สถานะ', 'วันที่จ่าย', 'เลขอ้างอิง'],
-      ...monthDocs.map((d) => [
-        d.kind === 'PO' ? 'ใบสั่งซื้อ' : 'ใบส่งของ(ส่งตรง)',
-        d.no,
-        d.date,
-        d.supplier,
-        d.target,
-        d.amount,
-        d.paid ? 'จ่ายแล้ว' : 'ค้างจ่าย',
-        d.paidAt || '',
-        d.paymentRef || '',
-      ]),
+      ['ประเภท', 'เลขที่', 'วันที่สั่ง', 'Supplier', 'ปลายทาง', 'ยอดทั้งใบ (บาท)', 'เงื่อนไขชำระเงิน', 'งวดที่', 'ครบกำหนด', 'ยอดงวด (บาท)', 'สถานะ', 'วันที่จ่าย', 'เลขอ้างอิง'],
+      ...monthDocs.flatMap((d) =>
+        d.plan.map((p) => [
+          d.kind === 'PO' ? 'ใบสั่งซื้อ' : 'ใบส่งของ(ส่งตรง)',
+          d.no,
+          d.date,
+          d.supplier,
+          d.target,
+          d.amount,
+          d.terms,
+          `${p.seq}/${d.plan.length}`,
+          p.dueDate,
+          p.amount,
+          p.paid ? 'จ่ายแล้ว' : p.dueDate < today ? 'เกินกำหนด' : 'ค้างจ่าย',
+          p.paidAt || '',
+          p.paymentRef || '',
+        ])
+      ),
     ];
     const blob = new Blob(['﻿' + rows.map((r) => r.map(esc).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
@@ -203,9 +244,9 @@ export const BudgetReportTab: React.FC = () => {
           <div className="text-2xl font-extrabold text-emerald-700 mt-1">{fmt(paidAmt)} ฿</div>
         </div>
         <div className={card}>
-          <div className="text-xs text-slate-500">ค้างจ่ายเดือนนี้</div>
+          <div className="text-xs text-slate-500">ยังไม่จ่าย (ของยอดสั่งเดือนนี้)</div>
           <div className="text-2xl font-extrabold text-rose-700 mt-1">{fmt(unpaidAmt)} ฿</div>
-          <div className="text-[11px] text-slate-500 mt-1">ค้างจ่ายสะสมทุกเดือน {fmt(allUnpaidAmt)} ฿ ({allUnpaid.length} ใบ)</div>
+          <div className="text-[11px] text-slate-500 mt-1">ค้างจ่ายสะสมทุกเดือน {fmt(allUnpaidAmt)} ฿ ({dueRows.length} งวด)</div>
         </div>
         <div className={card}>
           <div className="text-xs text-slate-500 flex items-center justify-between">
@@ -256,17 +297,17 @@ export const BudgetReportTab: React.FC = () => {
                     <th className="py-1.5 text-right">ซื้อเดือนนี้</th>
                     <th className="py-1.5 text-right">ค้างจ่าย</th>
                     <th className="py-1.5 text-right">ใบ</th>
-                    <th className="py-1.5 text-right">ค้างนานสุด</th>
+                    <th className="py-1.5 text-right">ครบกำหนดแรก</th>
                   </tr>
                 </thead>
                 <tbody>
                   {bySupplier.map(([name, v]) => (
                     <tr key={name} className="border-b border-slate-100">
-                      <td className="py-1.5 font-semibold text-slate-800">{name}</td>
+                      <td className="py-1.5 font-semibold text-slate-800">{name}<div className="text-[10px] font-normal text-slate-500">{v.terms}</div></td>
                       <td className="py-1.5 text-right">{fmt(v.total)}</td>
                       <td className={`py-1.5 text-right font-bold ${v.unpaid > 0 ? 'text-rose-700' : 'text-slate-400'}`}>{fmt(v.unpaid)}</td>
                       <td className="py-1.5 text-right">{v.count}</td>
-                      <td className="py-1.5 text-right text-slate-500">{v.oldest || '-'}</td>
+                      <td className="py-1.5 text-right text-slate-500">{v.oldest ? fmtDate(v.oldest) : '-'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -295,6 +336,67 @@ export const BudgetReportTab: React.FC = () => {
             </div>
           )}
         </div>
+      </div>
+
+      <div className={card}>
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+          <div>
+            <h3 className="font-bold text-slate-900 text-sm">แผนเงินสดที่ต้องจ่าย (ตามวันครบกำหนด · ทุกเดือน)</h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">คำนวณจากเงื่อนไขของแต่ละ Supplier — ชำระทันที / เครดิต / ผ่อนเป็นงวด</p>
+          </div>
+          <div className="flex gap-2 text-xs">
+            <div className={`rounded-xl border px-3 py-1.5 ${overdueAmt > 0 ? 'bg-rose-50 border-rose-300 text-rose-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+              เกินกำหนด <strong>{fmt(overdueAmt)} ฿</strong> ({overdueRows.length} งวด)
+            </div>
+            <div className="rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-3 py-1.5">
+              ครบใน 7 วัน <strong>{fmt(soonAmt)} ฿</strong>
+            </div>
+          </div>
+        </div>
+        {cashByMonth.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {cashByMonth.map(([k, v]) => (
+              <span key={k} className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${k === 'เกินกำหนด' ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-slate-50 text-slate-700 border-slate-200'}`}>
+                {k === 'เกินกำหนด' ? k : thMonth(k)}: {fmt(v)} ฿
+              </span>
+            ))}
+          </div>
+        )}
+        {dueRows.length === 0 ? (
+          <p className="text-xs text-slate-500">ไม่มียอดค้างจ่าย</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-slate-500 border-b border-slate-200 text-left">
+                  <th className="py-1.5">ครบกำหนด</th>
+                  <th className="py-1.5">เอกสาร</th>
+                  <th className="py-1.5">Supplier</th>
+                  <th className="py-1.5 text-right">ยอด (฿)</th>
+                  <th className="py-1.5 text-center">จ่ายเงิน</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dueRows.slice(0, 30).map(({ d, p }) => (
+                  <tr key={`${d.key}-${p.seq}`} className="border-b border-slate-100">
+                    <td className={`py-1.5 font-semibold ${p.dueDate < today ? 'text-rose-700' : 'text-slate-800'}`}>
+                      {fmtDate(p.dueDate)}{p.dueDate < today && ' ⚠'}
+                    </td>
+                    <td className="py-1.5">{d.no}{d.plan.length > 1 ? ` · งวด ${p.seq}/${d.plan.length}` : ''}</td>
+                    <td className="py-1.5">{d.supplier}</td>
+                    <td className="py-1.5 text-right font-bold">{fmt(p.amount)}</td>
+                    <td className="py-1.5 text-center">
+                      <button onClick={() => payInst(d, p)} className="px-2.5 py-1 rounded-lg font-bold border bg-white text-rose-700 border-rose-300 hover:bg-rose-50 cursor-pointer">
+                        บันทึกจ่าย
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {dueRows.length > 30 && <p className="text-[11px] text-slate-500 mt-2">แสดง 30 งวดแรกจากทั้งหมด {dueRows.length} งวด</p>}
+          </div>
+        )}
       </div>
 
       <div className={card}>
@@ -337,7 +439,7 @@ export const BudgetReportTab: React.FC = () => {
                   <th className="py-1.5">Supplier</th>
                   <th className="py-1.5">ปลายทาง</th>
                   <th className="py-1.5 text-right">ยอด (฿)</th>
-                  <th className="py-1.5 text-center">การจ่ายเงิน</th>
+                  <th className="py-1.5 text-center">การจ่ายเงิน (ตามเงื่อนไข Supplier)</th>
                 </tr>
               </thead>
               <tbody>
@@ -350,17 +452,30 @@ export const BudgetReportTab: React.FC = () => {
                     <td className="py-1.5">{d.supplier}</td>
                     <td className="py-1.5">{d.target}</td>
                     <td className="py-1.5 text-right font-bold">{fmt(d.amount)}</td>
-                    <td className="py-1.5 text-center">
-                      <button
-                        onClick={() => togglePay(d)}
-                        className={`px-2.5 py-1 rounded-lg font-bold border cursor-pointer ${d.paid ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-white text-rose-700 border-rose-300 hover:bg-rose-50'}`}
-                      >
-                        {d.paid ? (
-                          <span className="inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />จ่ายแล้ว {d.paidAt || ''}{d.paymentRef ? ` (${d.paymentRef})` : ''}</span>
-                        ) : (
-                          'ค้างจ่าย · บันทึกจ่าย'
-                        )}
-                      </button>
+                    <td className="py-1.5">
+                      <div className="text-[10px] text-slate-500 text-center mb-0.5">{d.terms}</div>
+                      <div className="flex flex-wrap justify-center gap-1">
+                        {d.plan.map((p) => (
+                          <button
+                            key={p.seq}
+                            onClick={() => payInst(d, p)}
+                            className={`px-2 py-1 rounded-lg font-bold border cursor-pointer text-[11px] ${
+                              p.paid
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                : p.dueDate < today
+                                ? 'bg-rose-600 text-white border-rose-700'
+                                : 'bg-white text-rose-700 border-rose-300 hover:bg-rose-50'
+                            }`}
+                            title={p.paid ? `จ่ายเมื่อ ${fmtDate(p.paidAt)}${p.paymentRef ? ` (${p.paymentRef})` : ''} — คลิกเพื่อยกเลิก` : 'คลิกเพื่อบันทึกการจ่าย'}
+                          >
+                            {p.paid ? (
+                              <span className="inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />{d.plan.length > 1 ? `งวด ${p.seq} ` : ''}จ่ายแล้ว</span>
+                            ) : (
+                              `${d.plan.length > 1 ? `งวด ${p.seq} · ` : ''}${fmt(p.amount)} ฿ · ครบ ${fmtDate(p.dueDate)}`
+                            )}
+                          </button>
+                        ))}
+                      </div>
                     </td>
                   </tr>
                 ))}

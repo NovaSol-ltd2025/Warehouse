@@ -287,7 +287,7 @@ export const BranchRequisitionModal: React.FC<BranchRequisitionModalProps> = ({
       deliveryDate,
       receiverName: receiverName || currentBranch.defaultRecipientName || currentBranch.contactPerson,
       senderName,
-      supplierId: 'SUP-01',
+      supplierId: items.find((i) => i.id === itemsPayload[0]?.itemId)?.supplierId || undefined,
       notes:
         notes ||
         (effectiveRouting === 'SUPPLIER_DIRECT'

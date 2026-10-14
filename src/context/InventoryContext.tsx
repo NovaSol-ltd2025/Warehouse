@@ -1,3 +1,5 @@
+import { PaymentInstallment } from '../types/inventory';
+import { termsOf, buildPlan, planSummary, todayYmd } from '../utils/payment';
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode } from 'react';
 import {
   InventoryItem,
@@ -83,8 +85,11 @@ interface InventoryContextType {
     }
   ) => Promise<BranchOrder>;
   updateBranchOrderStatus: (id: string, status: BranchOrderStatus) => Promise<void>;
-  markOrderPayment: (id: string, paid: boolean, paymentRef?: string) => Promise<void>;
-  markPOPayment: (id: string, paid: boolean, paymentRef?: string) => Promise<void>;
+  markOrderPayment: (id: string, paid: boolean, paymentRef?: string, seq?: number) => Promise<void>;
+  markPOPayment: (id: string, paid: boolean, paymentRef?: string, seq?: number) => Promise<void>;
+  planForPO: (po: PurchaseOrder) => PaymentInstallment[];
+  planForOrder: (o: BranchOrder) => PaymentInstallment[];
+  supplierOfOrder: (o: BranchOrder) => Supplier | undefined;
   reconcileDeliveredOrder: (before: BranchOrder, after: BranchOrder) => Promise<void>;
   updateBranchOrder: (order: BranchOrder) => Promise<void>;
   deleteBranchOrder: (id: string, restoreStock?: boolean) => Promise<void>;
@@ -455,6 +460,10 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       routingType,
       status: 'PENDING',
     };
+    if (routingType === 'SUPPLIER_DIRECT') {
+      newOrder.paymentPlan = buildOrderPlan(newOrder);
+      newOrder.paymentStatus = 'UNPAID';
+    }
 
     await commit([upsert('branch_orders', newOrder)]);
     setBranchOrders((prev) => [newOrder, ...prev]);
@@ -515,20 +524,61 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
-  const markPOPayment = async (id: string, paid: boolean, paymentRef?: string) => {
-    const patch = paid
-      ? { paymentStatus: 'PAID' as const, paidAt: new Date().toISOString().split('T')[0], paymentRef: paymentRef || '' }
-      : { paymentStatus: 'UNPAID' as const, paidAt: '', paymentRef: '' };
+  // ===== เงื่อนไขการชำระเงิน / ตารางกำหนดจ่าย =====
+  const supplierOfOrder = (o: BranchOrder): Supplier | undefined =>
+    suppliers.find((x) => x.id === o.supplierId) ||
+    suppliers.find((x) => x.id === itemsRef.current.find((i) => i.id === o.items[0]?.itemId)?.supplierId) ||
+    suppliers[0];
+
+  const buildPOPlan = (po: PurchaseOrder, existing?: PaymentInstallment[]) =>
+    buildPlan(termsOf(suppliers.find((x) => x.id === po.supplierId)), po.totalAmount, po.orderDate, po.expectedDeliveryDate || po.orderDate, existing);
+
+  const buildOrderPlan = (o: BranchOrder, existing?: PaymentInstallment[]) =>
+    buildPlan(termsOf(supplierOfOrder(o)), o.totalAmount, o.date, o.deliveryDate || o.date, existing);
+
+  // ใบเก่าที่ยังไม่มีตารางจ่าย: สร้างตามเงื่อนไขปัจจุบัน และถ้าเคยกด "จ่ายแล้ว" ไว้ให้ถือว่าจ่ายครบ
+  const legacyPaid = (plan: PaymentInstallment[], d: { paymentStatus?: string; paidAt?: string; paymentRef?: string }) =>
+    d.paymentStatus === 'PAID'
+      ? plan.map((p) => ({ ...p, paid: true, paidAt: d.paidAt || p.dueDate, paymentRef: d.paymentRef || '' }))
+      : plan;
+
+  const planForPO = (po: PurchaseOrder): PaymentInstallment[] =>
+    po.paymentPlan?.length ? po.paymentPlan : legacyPaid(buildPOPlan(po), po);
+  const planForOrder = (o: BranchOrder): PaymentInstallment[] =>
+    o.paymentPlan?.length ? o.paymentPlan : legacyPaid(buildOrderPlan(o), o);
+
+  const applyPayment = (plan: PaymentInstallment[], paid: boolean, ref?: string, seq?: number): PaymentInstallment[] => {
+    const today = todayYmd();
+    if (!paid) return plan.map((p) => (seq === undefined || p.seq === seq ? { ...p, paid: false, paidAt: '', paymentRef: '' } : p));
+    const target = seq !== undefined ? seq : plan.find((p) => !p.paid)?.seq;
+    return plan.map((p) => (p.seq === target ? { ...p, paid: true, paidAt: today, paymentRef: ref || '' } : p));
+  };
+
+  const paymentPatch = (plan: PaymentInstallment[]) => {
+    const sum = planSummary(plan);
+    const lastPaid = [...plan].filter((p) => p.paid).sort((a, b) => (b.paidAt || '').localeCompare(a.paidAt || ''))[0];
+    return {
+      paymentPlan: plan,
+      paymentStatus: (sum.allPaid ? 'PAID' : 'UNPAID') as 'PAID' | 'UNPAID',
+      paidAt: sum.allPaid ? lastPaid?.paidAt || '' : '',
+      paymentRef: sum.allPaid ? lastPaid?.paymentRef || '' : '',
+    };
+  };
+
+  const markPOPayment = async (id: string, paid: boolean, paymentRef?: string, seq?: number) => {
+    const po = purchaseOrders.find((p) => p.id === id);
+    if (!po) return;
+    const patch = paymentPatch(applyPayment(planForPO(po), paid, paymentRef, seq));
     await commit([{ op: 'upsert', collection: 'purchase_orders', id, data: patch, merge: true }]);
     setPurchaseOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
   };
 
-  const markOrderPayment = async (id: string, paid: boolean, paymentRef?: string) => {
-    const patch = paid
-      ? { paymentStatus: 'PAID' as const, paidAt: new Date().toISOString().split('T')[0], paymentRef: paymentRef || '' }
-      : { paymentStatus: 'UNPAID' as const, paidAt: '', paymentRef: '' };
+  const markOrderPayment = async (id: string, paid: boolean, paymentRef?: string, seq?: number) => {
+    const o = branchOrders.find((x) => x.id === id);
+    if (!o) return;
+    const patch = paymentPatch(applyPayment(planForOrder(o), paid, paymentRef, seq));
     await commit([{ op: 'upsert', collection: 'branch_orders', id, data: patch, merge: true }]);
-    setBranchOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
+    setBranchOrders((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   };
 
   const updateBranchOrderStatus = async (id: string, status: BranchOrderStatus) => {
@@ -550,7 +600,12 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     setBranchOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)));
   };
 
-  const updateBranchOrder = async (updatedOrder: BranchOrder) => {
+  const updateBranchOrder = async (input: BranchOrder) => {
+    const prevOrder = branchOrders.find((o) => o.id === input.id);
+    const updatedOrder: BranchOrder =
+      input.routingType === 'SUPPLIER_DIRECT'
+        ? { ...input, ...paymentPatch(buildOrderPlan(input, prevOrder ? planForOrder(prevOrder) : input.paymentPlan)) }
+        : input;
     await commit([upsert('branch_orders', updatedOrder, true)]);
     setBranchOrders((prev) => prev.map((o) => (o.id === updatedOrder.id ? updatedOrder : o)));
   };
@@ -576,7 +631,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       0
     );
 
-    const minAmountMet = totalAmount >= 5000;
+    const poSupplier = suppliers.find((x) => x.id === poData.supplierId);
+    const minAmountMet = totalAmount >= (Number(poSupplier?.minOrderAmount) || 0);
     const count = purchaseOrders.length + 1;
     const dateStr = new Date().toISOString().slice(2, 7).replace('-', '');
     const poNumber = `PO-${dateStr}-${String(count).padStart(3, '0')}`;
@@ -589,6 +645,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       minAmountMet,
       status: 'ORDERED',
     };
+    newPO.paymentPlan = buildPOPlan(newPO);
+    newPO.paymentStatus = 'UNPAID';
 
     await commit([upsert('purchase_orders', newPO)]);
     setPurchaseOrders((prev) => [newPO, ...prev]);
@@ -635,7 +693,9 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   const updatePurchaseOrder = async (before: PurchaseOrder, after: PurchaseOrder) => {
     const totalAmount = after.items.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
-    const updated: PurchaseOrder = { ...after, totalAmount, minAmountMet: totalAmount >= 5000 };
+    const sup = suppliers.find((x) => x.id === after.supplierId);
+    const updated: PurchaseOrder = { ...after, totalAmount, minAmountMet: totalAmount >= (Number(sup?.minOrderAmount) || 0) };
+    Object.assign(updated, paymentPatch(buildPOPlan(updated, planForPO(before))));
 
     if (before.status === 'RECEIVED') {
       if (before.destination !== updated.destination) {
@@ -777,7 +837,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
   const calculateProcurementDeficitFromDemand = () => {
     const ym = new Date().toISOString().slice(0, 7);
     const supplier = suppliers[0] || INITIAL_SUPPLIERS[0];
-    const minOrderAmount = supplier?.minOrderAmount || 5000;
+    const minOrderAmount = supplier?.minOrderAmount ?? 0;
 
     const deficits = items
       .map((item) => {
@@ -906,6 +966,9 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         updateBranchOrderStatus,
         markOrderPayment,
         markPOPayment,
+        planForPO,
+        planForOrder,
+        supplierOfOrder,
         reconcileDeliveredOrder,
         updateBranchOrder,
         deleteBranchOrder,

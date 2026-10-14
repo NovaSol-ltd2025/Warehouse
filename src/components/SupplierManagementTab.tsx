@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Factory, Plus, Pencil, Trash2, Phone, Mail, MapPin, User, X, Search, Package } from 'lucide-react';
 import { useInventory } from '../context/InventoryContext';
-import { Supplier } from '../types/inventory';
+import { Supplier, PaymentTermType } from '../types/inventory';
+import { termsLabel, minOrderLabel } from '../utils/payment';
 
 type Form = {
   name: string;
@@ -11,6 +12,10 @@ type Form = {
   address: string;
   minOrderAmount: string;
   deliveryLeadTime: string;
+  paymentTermType: PaymentTermType;
+  creditDays: string;
+  installmentCount: string;
+  installmentIntervalDays: string;
   notes: string;
 };
 
@@ -22,6 +27,10 @@ const emptyForm: Form = {
   address: '',
   minOrderAmount: '5000',
   deliveryLeadTime: '7',
+  paymentTermType: 'IMMEDIATE',
+  creditDays: '30',
+  installmentCount: '3',
+  installmentIntervalDays: '30',
   notes: '',
 };
 
@@ -63,6 +72,10 @@ export const SupplierManagementTab: React.FC = () => {
       address: s.address || '',
       minOrderAmount: String(s.minOrderAmount ?? 0),
       deliveryLeadTime: String(s.deliveryLeadTime ?? 0),
+      paymentTermType: s.paymentTermType || 'IMMEDIATE',
+      creditDays: String(s.creditDays ?? (s.paymentTermType === 'INSTALLMENT' ? 0 : 30)),
+      installmentCount: String(s.installmentCount ?? 3),
+      installmentIntervalDays: String(s.installmentIntervalDays ?? 30),
       notes: s.notes || '',
     });
     setError('');
@@ -79,6 +92,10 @@ export const SupplierManagementTab: React.FC = () => {
       address: form.address.trim(),
       minOrderAmount: Number(form.minOrderAmount) || 0,
       deliveryLeadTime: Number(form.deliveryLeadTime) || 0,
+      paymentTermType: form.paymentTermType,
+      creditDays: form.paymentTermType === 'IMMEDIATE' ? 0 : Math.max(0, Number(form.creditDays) || 0),
+      installmentCount: Math.max(2, Math.floor(Number(form.installmentCount) || 2)),
+      installmentIntervalDays: Math.max(1, Math.floor(Number(form.installmentIntervalDays) || 30)),
       notes: form.notes.trim() || undefined,
     };
     setSaving(true);
@@ -162,7 +179,8 @@ export const SupplierManagementTab: React.FC = () => {
                   {s.address && <div className="flex gap-2"><MapPin className="w-3.5 h-3.5 mt-0.5 text-slate-400" />{s.address}</div>}
                 </div>
                 <div className="text-[11px] text-slate-500 border-t border-slate-100 pt-2">
-                  สั่งขั้นต่ำ {Number(s.minOrderAmount || 0).toLocaleString()} ฿ · ส่งภายใน {s.deliveryLeadTime || 0} วัน
+                  <span className="font-semibold text-slate-700">{minOrderLabel(s)}</span> · ส่งภายใน {s.deliveryLeadTime || 0} วัน ·{' '}
+                  <span className="font-semibold text-blue-700">{termsLabel(s)}</span>
                   {s.notes && <div className="mt-1 text-slate-600">{s.notes}</div>}
                 </div>
               </div>
@@ -205,13 +223,52 @@ export const SupplierManagementTab: React.FC = () => {
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-xs font-bold text-slate-700">
-                  ยอดสั่งซื้อขั้นต่ำ (฿)
+                  ยอดสั่งซื้อขั้นต่ำ (฿) — 0 = ไม่มีขั้นต่ำ
                   <input type="number" min={0} className={`${input} mt-1`} value={form.minOrderAmount} onChange={set('minOrderAmount')} />
                 </label>
                 <label className="block text-xs font-bold text-slate-700">
                   ระยะเวลาส่ง (วัน)
                   <input type="number" min={0} className={`${input} mt-1`} value={form.deliveryLeadTime} onChange={set('deliveryLeadTime')} />
                 </label>
+              </div>
+              <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3 space-y-3">
+                <label className="block text-xs font-bold text-slate-700">
+                  เงื่อนไขการชำระเงิน
+                  <select
+                    className={`${input} mt-1`}
+                    value={form.paymentTermType}
+                    onChange={(e) => setForm((f) => ({ ...f, paymentTermType: e.target.value as PaymentTermType }))}
+                  >
+                    <option value="IMMEDIATE">ชำระทันที (วันที่สั่งซื้อ)</option>
+                    <option value="CREDIT">เครดิต (ชำระภายหลังรับของ N วัน)</option>
+                    <option value="INSTALLMENT">ผ่อนชำระเป็นงวด</option>
+                  </select>
+                </label>
+                {form.paymentTermType === 'CREDIT' && (
+                  <label className="block text-xs font-bold text-slate-700">
+                    เครดิต (วัน นับจากวันที่ได้รับสินค้า)
+                    <input type="number" min={0} className={`${input} mt-1`} value={form.creditDays} onChange={set('creditDays')} />
+                  </label>
+                )}
+                {form.paymentTermType === 'INSTALLMENT' && (
+                  <div className="grid grid-cols-3 gap-3">
+                    <label className="block text-xs font-bold text-slate-700">
+                      จำนวนงวด
+                      <input type="number" min={2} className={`${input} mt-1`} value={form.installmentCount} onChange={set('installmentCount')} />
+                    </label>
+                    <label className="block text-xs font-bold text-slate-700">
+                      ห่างกัน (วัน)
+                      <input type="number" min={1} className={`${input} mt-1`} value={form.installmentIntervalDays} onChange={set('installmentIntervalDays')} />
+                    </label>
+                    <label className="block text-xs font-bold text-slate-700">
+                      งวดแรกหลังรับของ (วัน)
+                      <input type="number" min={0} className={`${input} mt-1`} value={form.creditDays} onChange={set('creditDays')} />
+                    </label>
+                  </div>
+                )}
+                <p className="text-[11px] text-slate-500">
+                  ระบบสร้างตารางกำหนดจ่ายให้ทุกใบสั่งซื้อตามเงื่อนไขนี้ (ใบที่สร้างไปแล้วไม่เปลี่ยนตารางเดิม) และแสดงในหน้ารายงานงบประมาณ & ค้างจ่าย
+                </p>
               </div>
               <label className="block text-xs font-bold text-slate-700">
                 หมายเหตุ
